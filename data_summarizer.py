@@ -1,4 +1,5 @@
 import os
+from matplotlib import lines
 import pandas as pd
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -24,27 +25,23 @@ def summarize_dataframe(df):
 
     # Numeric stats
     numeric_cols = df.select_dtypes(include='number')
-    lines.append(f"\nNumeric Statistics:\n{numeric_cols.describe().round(2).to_string()}")
+    if not numeric_cols.empty:
+        lines.append(f"\nNumeric Statistics:\n{numeric_cols.describe().round(2).to_string()}")
 
-    # Categorical breakdown
-    for col in ['category_name', 'country', 'continent', 'gender', 'occupation']:
-        if col in df.columns:
-            top = df[col].value_counts().head(5).to_dict()
-            lines.append(f"\nTop values in '{col}': {top}")
-        else:
-            lines.append(f"\nColumn '{col}' not found in data.")
+    # Categorical breakdown - auto detect text columns
+    categorical_columns = df.select_dtypes(include='object').columns.tolist()
+    for col in categorical_columns[:5]:   # limit to first 5 categorical columns for brevity
+        top = df[col].value_counts().head(5).to_dict()
+        lines.append(f"\nTop values in '{col}': {top}")
 
-    # key business metrics
-    lines.append(f"\nTotal revenue: ${df['revenue'].sum():,.2f}")
-    lines.append(f"Total profit: ${df['profit'].sum():,.2f}")
-    lines.append(f"Average order quantity: {df['order_quantity'].mean():,.2f}")
-    lines.append(f"Profit margin: {(df['profit'].sum() / df['revenue'].sum() * 100):,.2f}%")
-
-    # missing values
+    # Missing values
     nulls = df.isnull().sum()
     if nulls.any():
         lines.append(f"\nMissing values: {nulls[nulls > 0].to_dict()}")
 
+    # Sample rows
+    lines.append(f"\nSample rows: {df.head(5).to_string()}")
+    
     return "\n".join(lines)
 
 # ----- Send to gemini and Initializing the llm
