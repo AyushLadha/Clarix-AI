@@ -34,11 +34,15 @@ with st.sidebar:
     )
 
 # ----- File upload
-uploaded_file = st.file_uploader("Upload your dataset (CSV)", type=["csv"])
+uploaded_file = st.file_uploader("Upload your  CSV file or Excel file", type=["csv", "xlsx", "xls"])
 
 if uploaded_file:
     # Load the file
-    df = pd.read_csv(uploaded_file)
+    file_name = uploaded_file.name
+    if file_name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
 
     # Show quick stats
     col1, col2, col3, col4 = st.columns(4)
@@ -69,7 +73,7 @@ if uploaded_file:
                 if not numeric_columns.empty:
                     lines.append(f"\nNumeric Statistics: {numeric_columns.describe().round(2).to_string() }")
                 
-                categorical_columns = df.select_dtypes(include = 'object').columns.tolist()
+                categorical_columns = df.select_dtypes(include = ['object', 'string']).columns.tolist()
                 for col in categorical_columns[:5]:
                     top = df[col].value_counts().head(5).to_dict()
                     lines.append(f"\nTop values in '{col}': {top}")
@@ -107,7 +111,7 @@ if uploaded_file:
             # Display report
             st.success("Report generated successfully!")
             st.markdown("---")
-            st.markdown("report")
+            st.markdown("Report")
 
             # Download button
             st.download_button(
@@ -115,5 +119,5 @@ if uploaded_file:
                 data = report,
                 file_name = "AI_Data_Report.txt",
                 mime = "text/plain",
-                use_container_width = True
+                width = "stretch"
             )
