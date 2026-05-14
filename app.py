@@ -114,10 +114,11 @@ if uploaded_file:
             st.markdown("Report")
 
             # Download button
+            base_name = os.path.splitext(uploaded_file.name)[0]
             st.download_button(
                 label = "Download Report as Text File",
                 data = report,
-                file_name = "AI_Data_Report.txt",
+                file_name = f"{base_name}_Report.txt",
                 mime = "text/plain",
                 width = "stretch"
             )
