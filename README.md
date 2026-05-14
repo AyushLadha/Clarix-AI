@@ -56,7 +56,6 @@ Tested on a 56,000 row enterprise sales dataset — Gemini identified:
 - Actionable recommendations for regional expansion
 
 ## 🔮 Next improvements
-- [ ] Add Excel file support
 - [ ] Auto-generate charts alongside the report
 - [ ] Add follow-up questions about the report
 - [ ] Deploy to Streamlit Cloud
