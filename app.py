@@ -8,7 +8,146 @@ import matplotlib.pyplot as plt
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
-#----- Load API key
+# Helper function to clean dataframe columns
+def clean_dataframe(df):
+    """Fix mixed type columns that cause Arrow/PyArrow errors in Streamlit"""
+    for col in df.columns:
+        # If column is object type but has mixed int/str values — convert all to str
+        if df[col].dtype == ['object', 'string']:
+            df[col] = df[col].astype(str)
+    return df
+
+# Function to generate Word report with charts
+def generate_word_report(full_report, sheets_data):
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    import io
+    matplotlib.use('Agg')
+
+    doc = Document()
+
+    # Title and styling 
+    title = doc.add_heading('AI Analysis Report', 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Report content
+    doc.add_heading('Analysis', level = 1)
+    for line in full_report.split('\n'):
+        line = line.strip()
+        if not line:
+            doc.add_paragraph()
+        elif line.startswith('## '):
+            doc.add_heading(line.replace('## ', ''), level = 2)
+        elif line.startswith('# '):
+            doc.add_heading(line.replace('# ', ''), level = 1)
+        elif line.startswith('='*10):
+            doc.add_paragraph('─' * 40)
+        elif line.startswith('* ') or line.startswith('- '):
+            doc.add_paragraph(line[2:], style = 'List Bullet')
+        else:
+            doc.add_paragraph(line)
+
+    # Charts
+    doc.add_page_break()
+    doc.add_heading('Auto-Generated Charts', level=1)
+
+    for sheet_name, df in sheets_data.items():
+        if len(sheets_data) > 1:
+            doc.add_heading(f'Charts - {sheet_name}', level=2)
+
+        numeric_cols = df.select_dtypes(include = 'number').columns.tolist()
+        cat_cols = df.select_dtypes(include = ['object', 'string']).columns.tolist()
+
+        # Chart 1: Numeric distributions
+        if numeric_cols:
+            cols_to_plot = numeric_cols[:4]
+            fig, axes = plt.subplots(1, len(cols_to_plot), figsize = (5 * len(cols_to_plot), 4))
+            if len(cols_to_plot) == 1:
+                axes = [axes]
+            for ax, col in zip(axes, cols_to_plot):
+                df[col].dropna().hist(ax = ax, bins = 20, color = '#4f46e5', edgecolor = 'white')
+                ax.set_title(col, fontsize = 11)
+                ax.tick_params(labelsize = 9)
+            plt.tight_layout()
+
+            # Save chart to memory buffer and insert into Word
+            buf = io.BytesIO()
+            fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+            buf.seek(0)
+            doc.add_paragraph('Numeric Column Distributions').runs[0].bold = True
+            doc.add_picture(buf, width=Inches(6))
+            plt.close()
+
+        # Chart 2: Top categorical bar chart
+        best_cat = None
+        for col in cat_cols:
+            if df[col].nunique() != 'nan' and 2 <= df[col].nunique() <= 15:
+                best_cat = col
+                break
+
+        if best_cat:
+            fig, ax = plt.subplots(figsize=(7, 4))
+            df[best_cat].value_counts().head(10).plot(
+                kind = 'bar', ax = ax, color = '#4f46e5', edgecolor = 'white'
+            )
+            ax.set_title(f"Top values in '{best_cat}'", fontsize=11)
+            ax.tick_params(axis = 'x', rotation = 45, labelsize = 9)
+            plt.tight_layout()
+
+            buf = io.BytesIO()
+            fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+            buf.seek(0)
+            doc.add_paragraph(f'Top Values — {best_cat}').runs[0].bold = True
+            doc.add_picture(buf, width = Inches(6))
+            plt.close()
+
+        # Chart 3: Scatter plot
+        if len(numeric_cols) >= 2:
+            scatter_df = df[[numeric_cols[0], numeric_cols[1]]].dropna()
+            if len(scatter_df) > 0:
+                fig, ax = plt.subplots(figsize=(7, 4))
+                ax.scatter(
+                    scatter_df[numeric_cols[0]],
+                    scatter_df[numeric_cols[1]],
+                    alpha = 0.4, color = '#4f46e5', s = 15
+                )
+                ax.set_xlabel(numeric_cols[0], fontsize = 10)
+                ax.set_ylabel(numeric_cols[1], fontsize = 10)
+                ax.set_title(f"{numeric_cols[0]} vs {numeric_cols[1]}", fontsize = 11)
+                plt.tight_layout()
+
+                buf = io.BytesIO()
+                fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+                buf.seek(0)
+                doc.add_paragraph(f'{numeric_cols[0]} vs {numeric_cols[1]}').runs[0].bold = True
+                doc.add_picture(buf, width = Inches(6))
+                plt.close()
+
+        # Chart 4: Missing values
+        nulls = df.isnull().sum()
+        nulls = nulls[nulls > 0]
+        if not nulls.empty:
+            fig, ax = plt.subplots(figsize=(7, 3))
+            nulls.plot(kind = 'bar', ax = ax, color = '#e11d48', edgecolor = 'white')
+            ax.set_title("Missing values per column", fontsize = 11)
+            ax.tick_params(axis = 'x', rotation = 45, labelsize = 9)
+            plt.tight_layout()
+
+            buf = io.BytesIO()
+            fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+            buf.seek(0)
+            doc.add_paragraph('Missing Values per Column').runs[0].bold = True
+            doc.add_picture(buf, width = Inches(6))
+            plt.close()
+
+    # Save the Word document to a BytesIO buffer and return it for download
+    doc_buf = io.BytesIO()
+    doc.save(doc_buf)
+    doc_buf.seek(0)
+    return doc_buf
+
+# ----- Load API key
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
@@ -43,21 +182,14 @@ if uploaded_file:
     file_name = uploaded_file.name
     if file_name.endswith(".csv"): 
         # CSV has only 1 sheet. Load it directly.
-        sheets_data = {"Sheet 1": pd.read_csv(uploaded_file)}
-        for col in sheets_data.columns:
-            if sheets_data[col].dtype == 'object':
-                sheets_data[col] = sheets_data[col].astype(str)
-            
+        sheets_data = {"Sheet 1": clean_dataframe(pd.read_csv(uploaded_file))}
     else:
         x1 = pd.ExcelFile(uploaded_file)
         sheets_names = x1.sheet_names
 
         if len(sheets_names) == 1:
             # Only 1 sheet, load it directly
-            sheets_data = {sheets_names[0]: x1.parse(sheets_names[0])}
-            for col in sheets_data.columns:
-                if sheets_data[col].dtype == 'object':
-                    sheets_data[col] = sheets_data[col].astype(str)
+            sheets_data = {sheets_names[0]: clean_dataframe(x1.parse(sheets_names[0]))}
         else:  
             # for multiple sheets, let user select which one to analyze
             st.info(f"This file contains {len(sheets_names)} sheets.")
@@ -68,9 +200,9 @@ if uploaded_file:
                 st.stop()
             
             # Load the selected sheets into a dictionary
-            sheets_data = {sheet: x1.parse(sheet) for sheet in selected_sheet}
+            sheets_data = {sheet: clean_dataframe(x1.parse(sheet)) for sheet in selected_sheet}
 
-    # Show quick stats and # Preview the data for each sheet
+    # Show quick stats and Preview the data for each sheet
     for sheet_name, df in sheets_data.items():
         if len(sheets_data) > 1:
             st.subheader(f"Sheet: {sheet_name}")
@@ -115,6 +247,7 @@ if uploaded_file:
                 
                 return "\n".join(lines)
 
+            # Function to generate charts for a given dataframe and display in Streamlit
             def charts_generator(df, sheet_name):
                 matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
                 
@@ -258,15 +391,31 @@ if uploaded_file:
             # Auto-generated charts for each sheet
             st.markdown("---")
             for sheet_name, df in sheets_data.items():
-                st.markdown(f"### Charts for Sheet: {sheet_name}")
                 charts_generator(df, sheet_name)
 
             # Download button
+            st.markdown("### Download Report")
             base_name = os.path.splitext(uploaded_file.name)[0]
-            st.download_button(
-                label = "Download Report as Text File",
-                data = full_report,
-                file_name = f"{base_name}_Report.txt",
-                mime = "text/plain",
-                width = "stretch"
-            )
+
+            # Provide both Word and Text download options side by side
+            col1, col2 = st.columns([1, 1])
+            # Text file download
+            with col1:            
+                st.download_button(
+                    label = "Download Report as Text File",
+                    data = full_report,
+                    file_name = f"{base_name}_Report.txt",
+                    mime = "text/plain",
+                    width = "stretch"
+                )
+            # Word document download
+            with col2:
+                with st.spinner("Generating Word document..."):
+                    doc_buf = generate_word_report(full_report, sheets_data)
+                    st.download_button(
+                        label = "Download Report as Word Document",
+                        data = doc_buf,
+                        file_name = f"{base_name}_Report.docx",
+                        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        width = "stretch"
+                    )
