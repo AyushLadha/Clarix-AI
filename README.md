@@ -1,22 +1,33 @@
 # 📊 AI Report Generator
 
-An AI-powered data insights tool that analyzes any CSV file and generates a professional business report instantly.
+An AI-powered data insights tool that analyzes any CSV or Excel file and generates a professional business report instantly — with auto-generated charts and 
+downloadable in multiple formats.
 
 ## 🎯 What it does
-- Upload any CSV file via a clean web interface
+- Upload any CSV or Excel file (.xlsx) via a clean web interface
+- Select specific sheets to analyze (supports multi-sheet Excel files)
 - AI analyzes your data and generates a structured report with:
   - Executive Summary
   - Key Findings
   - Data Quality Notes
   - Actionable Recommendations
-- Download the report as a text file
+- Auto-generates 4 charts from your data:
+  - Numeric column distributions
+  - Top categorical column bar chart
+  - Numeric vs Numeric scatter plot
+  - Missing values breakdown
+- Download the report as:
+  - 📄 Plain text (.txt)
+  - 📝 Word document (.docx) with charts embedded
 
 ## 🛠️ Tech Stack
 - **Python** — core language
 - **Streamlit** — web interface
 - **LangChain** — LLM orchestration
-- **Google Gemini** — AI model (free tier)
-- **Pandas** — data processing
+- **Google Gemini 1.5 Flash** — AI model (free tier)
+- **Pandas** — data processing and summarization
+- **Matplotlib** — automatic chart generation
+- **Python-docx** — Word document generation with embedded charts
 
 ## 🚀 How to run locally
 
@@ -25,12 +36,12 @@ git clone https://github.com/AyushLadha/ai-report-generator.git
 cd ai-report-generator
 
 ### 2. Install dependencies
-pip install streamlit pandas langchain langchain-google-genai google-generativeai python-dotenv
+pip install streamlit pandas langchain langchain-google-genai 
+            google-generativeai python-dotenv matplotlib python-docx
 
 ### 3. Get a free Gemini API key
 - Go to https://aistudio.google.com
 - Click Get API Key → Create API key
-- No credit card required
 
 ### 4. Add your API key
 Create a .env file in the project folder:
@@ -41,12 +52,20 @@ streamlit run app.py
 
 Open http://localhost:8501 in your browser
 
+## 📁 Supported File Types
+| Format | Single Sheet | Multi Sheet |
+|--------|-------------|-------------|
+| .csv   | ✅          | ➖ (CSV is always single sheet) |
+| .xlsx  | ✅          | ✅ (select one or more sheets)  |
+
 ## 💡 Key concepts learned
 - Calling LLM APIs with LangChain
 - Prompt engineering with SystemMessage and HumanMessage
 - Compressing large datasets into token-efficient summaries
 - Building interactive web apps with Streamlit
 - Managing API keys securely with .env files
+- Generating and embedding charts into Word documents
+- Handling mixed data types in pandas DataFrames
 
 ## 📈 Sample output
 Tested on a 56,000 row enterprise sales dataset — Gemini identified:
@@ -56,6 +75,12 @@ Tested on a 56,000 row enterprise sales dataset — Gemini identified:
 - Actionable recommendations for regional expansion
 
 ## 🔮 Next improvements
-- [ ] Auto-generate charts alongside the report
-- [ ] Add follow-up questions about the report
-- [ ] Deploy to Streamlit Cloud
+- [ ] Follow-up questions about the report (chat history)
+- [ ] Deploy to Streamlit Cloud (free hosting)
+- [ ] Chat with your data (AI Agents)
+
+## 📁 Project structure
+ai-report-generator/
+├── app.py              # Main application
+├── requirements.txt    # Dependencies
+└── README.md           # This file
