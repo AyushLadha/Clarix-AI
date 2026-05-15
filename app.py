@@ -1,7 +1,10 @@
 import os
 import pandas as pd
 from dotenv import load_dotenv
+from pyparsing import col
 import streamlit as st
+import matplotlib
+import matplotlib.pyplot as plt
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -40,14 +43,21 @@ if uploaded_file:
     file_name = uploaded_file.name
     if file_name.endswith(".csv"): 
         # CSV has only 1 sheet. Load it directly.
-        sheets_data = {"Sheet 1": pd.read_csv(uploaded_file)}   
+        sheets_data = {"Sheet 1": pd.read_csv(uploaded_file)}
+        for col in sheets_data.columns:
+            if sheets_data[col].dtype == 'object':
+                sheets_data[col] = sheets_data[col].astype(str)
+            
     else:
         x1 = pd.ExcelFile(uploaded_file)
         sheets_names = x1.sheet_names
 
         if len(sheets_names) == 1:
             # Only 1 sheet, load it directly
-            sheets_data = {sheets_names[0]: x1.parse(sheets_names[0])} 
+            sheets_data = {sheets_names[0]: x1.parse(sheets_names[0])}
+            for col in sheets_data.columns:
+                if sheets_data[col].dtype == 'object':
+                    sheets_data[col] = sheets_data[col].astype(str)
         else:  
             # for multiple sheets, let user select which one to analyze
             st.info(f"This file contains {len(sheets_names)} sheets.")
@@ -105,11 +115,104 @@ if uploaded_file:
                 
                 return "\n".join(lines)
 
+            def charts_generator(df, sheet_name):
+                matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
+                
+                charts_created = 0
+
+                st.subheader(f"Auto Generated Charts for {sheet_name}" if len(sheets_data) > 1 else "Auto Generated Charts")
+
+                # Chart 1:  Distribution of numeric columns (histograms)
+                numeric_cols = df.select_dtypes(include = 'number').columns.tolist()
+                if numeric_cols:
+                    st.markdown("**Distribution of Numeric Columns**")
+                    # Show up to 4 columns
+                    cols_to_plot = numeric_cols[:4]
+                    fig, axes = plt.subplots(1, len(cols_to_plot), figsize = (5 * len(cols_to_plot), 4))
+
+                    # If only one column, axes is not a list, so we make it a list for consistency
+                    if len(cols_to_plot) == 1:
+                        axes = [axes]
+                    
+                    for ax, col in zip(axes, cols_to_plot):
+                        df[col].dropna().hist(ax = ax, bins = 20, color = 'skyblue', edgecolor = 'black')
+                        ax.set_title(col, fontsize = 10)
+                        ax.set_xlabel("")
+                        ax.tick_params(labelsize = 8)
+                    
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    plt.close(fig)
+                    charts_created += 1
+
+                # Chart 2: Bar chart of top categorical columns
+                categorical_cols = df.select_dtypes(include = ['object', 'string']).columns.tolist()
+
+                if categorical_cols:
+                    # pick the categorical column with the most unique values but less than 20 (to avoid overcrowded charts)
+                    best_cat_col = None
+                    for col in categorical_cols:
+                        unique_vals = df[col].nunique()
+                        if 1 < unique_vals <= 20:  # We want some variability but not too many unique values
+                            best_cat_col = col
+                            break
+                    
+                    if best_cat_col:
+                        st.markdown(f"**Distribution of Categorical Column: {best_cat_col}**")
+                        fig, ax = plt.subplots(figsize = (6, 4))
+                        top_values = df[best_cat_col].value_counts().head(10)
+                        top_values.plot(kind = 'bar', ax = ax, color = 'salmon', edgecolor = 'black')
+                        ax.set_title(f"Top Values in '{best_cat_col}'", fontsize = 10)
+                        ax.set_xlabel("")
+                        ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+                        charts_created += 1
+                
+                # Chart  3: Numeric vs Numeric (scatter plot)
+                if len(numeric_cols) >= 2:
+                    # Drop rows where either of the two columns is null to avoid issues in plotting
+                    scatter_df = df[[numeric_cols[0], numeric_cols[1]]].dropna()
+
+                    if len(scatter_df) > 0:  # Only plot if there are valid rows to plot
+                        st.markdown(f"**{numeric_cols[0]} vs {numeric_cols[1]}**")
+                        fig, ax = plt.subplots(figsize = (6, 4))
+                        ax.scatter(scatter_df[numeric_cols[0]], scatter_df[numeric_cols[1]], alpha = 0.5, color = 'lightgreen', s = 20, edgecolor = 'black')
+                        ax.set_xlabel(numeric_cols[0], fontsize = 8)
+                        ax.set_ylabel(numeric_cols[1], fontsize = 8)
+                        ax.set_title(f"{numeric_cols[0]} vs {numeric_cols[1]}", fontsize = 10)
+                        ax.tick_params(labelsize = 8)
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close(fig)
+                        charts_created += 1
+                
+                # Chart 4: Missing values bar chart (if there are missing values)
+                nulls = df.isnull().sum()
+                nulls = nulls[nulls > 0]
+
+                if not nulls.empty:
+                    st.markdown("**Missing Values Bar Chart**")
+                    fig, ax = plt.subplots(figsize = (6, 4))
+                    nulls.plot(kind = 'bar', ax = ax, color = 'lightcoral', edgecolor = 'black')
+                    ax.set_title("Missing Values by Column", fontsize = 10)
+                    ax.set_xlabel("Columns", fontsize = 8)
+                    ax.set_ylabel("Number of Missing Values", fontsize = 8)
+                    ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    plt.close(fig)
+                    charts_created += 1
+
+                # If no charts were created, show a message
+                if charts_created == 0:
+                    st.info("No suitable charts could be generated for this dataset. Try uploading a different file or adjusting the data.")
+
             # Initialize the llm
             llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
 
             # Generate a report for each sheet and combine them into one final report
-
             sheet_reports = {}
 
             # Loop through each sheet and generate a report for it
@@ -151,6 +254,12 @@ if uploaded_file:
             st.success("Report generated successfully!")
             st.markdown("---")
             st.markdown(full_report)
+
+            # Auto-generated charts for each sheet
+            st.markdown("---")
+            for sheet_name, df in sheets_data.items():
+                st.markdown(f"### Charts for Sheet: {sheet_name}")
+                charts_generator(df, sheet_name)
 
             # Download button
             base_name = os.path.splitext(uploaded_file.name)[0]
