@@ -78,9 +78,3 @@ Tested on a 56,000 row enterprise sales dataset — Gemini identified:
 - [ ] Follow-up questions about the report (chat history)
 - [ ] Deploy to Streamlit Cloud (free hosting)
 - [ ] Chat with your data (AI Agents)
-
-## 📁 Project structure
-ai-report-generator/
-├── app.py              # Main application
-├── requirements.txt    # Dependencies
-└── README.md           # This file
