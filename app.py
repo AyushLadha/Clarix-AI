@@ -218,8 +218,15 @@ if uploaded_file:
 
     st.divider()
 
-    # ----- Generate Button
+    # ----- Generate Button 
+    # When the user clicks the button, we will generate the report using Gemini and display it on the page. 
+    # We will also generate some auto-charts based on the data and include them in the report.
+    # We will use session state to keep track of the generated report and the conversation history for follow-up questions.
     if st.button("Generate Report", type = "primary", width = "stretch"):
+        # Reset session state for new report generation
+        st.session_state.chat_history = []
+        st.session_state.report_context = ""
+
         with st.spinner("Analyzing your data with Gemini... (~15-30 seconds)"):
 
             # Summarize the data
@@ -419,3 +426,65 @@ if uploaded_file:
                         mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         width = "stretch"
                     )
+
+            # Follow-up Questions
+            st.markdown("---")
+            st.markdown("### Any questions about the report or the data? Ask below!")
+            st.caption("You can ask for clarifications, deeper insights, or even request new charts based on the data.")
+
+            # Initialize session state for follow-up questions
+            # session_state persists across interactions, so we can keep track of the conversation history
+            if "chat_history" not in st.session_state:
+                st.session_state.chat_history = []
+
+            # We also store the full report in session state so that we can refer back to it when answering follow-up questions
+            if "report_context" not in st.session_state:
+                st.session_state.report_context = full_report
+            
+            # Display existing chat history
+            for message in st.session_state.chat_history:
+                if message["role"] == "user":
+                    with st.chat_message("user"):
+                        st.markdown(f"**You:** {message['content']}")
+                else:
+                    with st.chat_message("Assistant"):
+                        st.markdown(f"**Assistant:** {message['content']}")
+
+            # Input chat message
+            user_input = st.chat_input("Type your question here... ")
+            if user_input:
+                # Show user's message in the chat
+                with st.chat_message("user"):
+                    st.markdown(user_input)
+
+                # Build the message history for the LLM, including the system prompt, the original report context, and the user's follow-up question
+                messages = [
+                    SystemMessage(content  = """You are a senior data analyst. You have already provided a detailed report based on a dataset.
+                                   Now, you are answering follow-up questions about the report and the data.
+                                   Be specific, reference actual numbers and refer back to the report context when needed."""),
+
+                    HumanMessage(content = f"""Here is the original report you generated for reference:\n\n{st.session_state.report_context}
+                                 \n\nAnswer this follow-up question based on the report and data: {user_input}""")
+                ]
+                
+                # Add the previous conversation history to the messages so that the model has the full context of the conversation
+                for msg in st.session_state.chat_history:
+                    if msg["role"] == "user":
+                        messages.append(HumanMessage(content = msg["content"]))
+                    else:
+                        messages.append(SystemMessage(content = msg["content"]))
+
+                # Add the new question to the chat history
+                messages.append(HumanMessage(content = user_input))
+
+                # Get the model's response to the follow-up question
+                with st.chat_message("Assistant"):
+                    with st.spinner("Thinking..."):
+                        response = llm.invoke(messages)
+                        ai_response = response.content[0]['text']
+                        st.markdown(ai_response)
+
+                # Save both the user's question and the AI's response to the chat history in session state
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                st.session_state.chat_history.append({"role": "Assistant", "content": ai_response})
+
