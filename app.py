@@ -6,9 +6,9 @@ import streamlit as st
 import matplotlib
 import matplotlib.pyplot as plt
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
-# Helper function to clean dataframe columns
+# --------------- Helper function to clean dataframe columns
 def clean_dataframe(df):
     """Fix mixed type columns that cause Arrow/PyArrow errors in Streamlit"""
     for col in df.columns:
@@ -17,7 +17,140 @@ def clean_dataframe(df):
             df[col] = df[col].astype(str)
     return df
 
-# Function to generate Word report with charts
+# --------------- Function to summarize the data
+def summarize_dataframe(df):
+    lines = []
+    # Basic shape, column names and numeric stats, categorical columns and missing values
+    lines.append(f"Dataset: {df.shape[0]:,} rows x {df.shape[1]} columns")
+                
+    lines.append(f"\nColumns: {df.columns.tolist()}")
+                
+    numeric_columns = df.select_dtypes(include = 'number')
+    if not numeric_columns.empty:
+        lines.append(f"\nNumeric Statistics: {numeric_columns.describe().round(2).to_string() }")
+                
+    categorical_columns = df.select_dtypes(include = ['object', 'string']).columns.tolist()
+    # Priority columns — always include these if they exist
+    priority_keywords = ['country', 'region', 'territory', 'city', 'state',
+                         'continent', 'location', 'area', 'zone', 'gender',
+                         'category', 'segment', 'occupation', 'product']
+
+    priority_cols = [col for col in categorical_columns
+                     if any(kw in col.lower() for kw in priority_keywords)]
+
+    other_cols = [col for col in categorical_columns if col not in priority_cols]
+
+    # Show priority columns first, then fill remaining slots with others
+    cols_to_show = (priority_cols + other_cols)
+
+    for col in cols_to_show:
+        top = df[col].value_counts().head(5).to_dict()
+        lines.append(f"\nTop values in '{col}': {top}")
+                
+    nulls = df.isnull().sum()
+    if nulls.any():
+        lines.append(f"\nMissing values: {nulls[nulls > 0].to_dict()}")
+                
+    lines.append(f"\nSample rows: {df.head(5).to_string()}")
+                
+    return "\n".join(lines)
+
+# --------------- Function to generate charts for a given dataframe and display in Streamlit
+def charts_generator(df, sheet_name, sheets_data):
+    matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
+                
+    charts_created = 0
+
+    st.subheader(f"Auto Generated Charts for {sheet_name}" if len(sheets_data) > 1 else "Auto Generated Charts")
+
+    # Chart 1:  Distribution of numeric columns (histograms)
+    numeric_cols = df.select_dtypes(include = 'number').columns.tolist()
+    if numeric_cols:
+        st.markdown("**Distribution of Numeric Columns**")
+        # Show up to 4 columns
+        cols_to_plot = numeric_cols[:4]
+        fig, axes = plt.subplots(1, len(cols_to_plot), figsize = (5 * len(cols_to_plot), 4))
+
+        # If only one column, axes is not a list, so we make it a list for consistency
+        if len(cols_to_plot) == 1:
+            axes = [axes]
+                    
+        for ax, col in zip(axes, cols_to_plot):
+            df[col].dropna().hist(ax = ax, bins = 20, color = 'skyblue', edgecolor = 'black')
+            ax.set_title(col, fontsize = 10)
+            ax.set_xlabel("")
+            ax.tick_params(labelsize = 8)
+                    
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        charts_created += 1
+
+    # Chart 2: Bar chart of top categorical columns
+    categorical_cols = df.select_dtypes(include = ['object', 'string']).columns.tolist()
+
+    if categorical_cols:
+    # pick the categorical column with the most unique values but less than 20 (to avoid overcrowded charts)
+        best_cat_col = None
+    for col in categorical_cols:
+        unique_vals = df[col].nunique()
+        if 1 < unique_vals <= 20:  # We want some variability but not too many unique values
+            best_cat_col = col
+            break
+                    
+    if best_cat_col:
+        st.markdown(f"**Distribution of Categorical Column: {best_cat_col}**")
+        fig, ax = plt.subplots(figsize = (6, 4))
+        top_values = df[best_cat_col].value_counts().head(10)
+        top_values.plot(kind = 'bar', ax = ax, color = 'salmon', edgecolor = 'black')
+        ax.set_title(f"Top Values in '{best_cat_col}'", fontsize = 10)
+        ax.set_xlabel("")
+        ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        charts_created += 1
+                
+    # Chart  3: Numeric vs Numeric (scatter plot)
+    if len(numeric_cols) >= 2:
+        # Drop rows where either of the two columns is null to avoid issues in plotting
+        scatter_df = df[[numeric_cols[0], numeric_cols[1]]].dropna()
+
+        if len(scatter_df) > 0:  # Only plot if there are valid rows to plot
+            st.markdown(f"**{numeric_cols[0]} vs {numeric_cols[1]}**")
+            fig, ax = plt.subplots(figsize = (6, 4))
+            ax.scatter(scatter_df[numeric_cols[0]], scatter_df[numeric_cols[1]], alpha = 0.5, color = 'lightgreen', s = 20, edgecolor = 'black')
+            ax.set_xlabel(numeric_cols[0], fontsize = 8)
+            ax.set_ylabel(numeric_cols[1], fontsize = 8)
+            ax.set_title(f"{numeric_cols[0]} vs {numeric_cols[1]}", fontsize = 10)
+            ax.tick_params(labelsize = 8)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+            charts_created += 1
+                
+    # Chart 4: Missing values bar chart (if there are missing values)
+    nulls = df.isnull().sum()
+    nulls = nulls[nulls > 0]
+
+    if not nulls.empty:
+        st.markdown("**Missing Values Bar Chart**")
+        fig, ax = plt.subplots(figsize = (6, 4))
+        nulls.plot(kind = 'bar', ax = ax, color = 'lightcoral', edgecolor = 'black')
+        ax.set_title("Missing Values by Column", fontsize = 10)
+        ax.set_xlabel("Columns", fontsize = 8)
+        ax.set_ylabel("Number of Missing Values", fontsize = 8)
+        ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        charts_created += 1
+
+    # If no charts were created, show a message
+    if charts_created == 0:
+        st.info("No suitable charts could be generated for this dataset. Try uploading a different file or adjusting the data.")
+
+# --------------- Function to generate Word report with charts
 def generate_word_report(full_report, sheets_data):
     from docx import Document
     from docx.shared import Inches, Pt, RGBColor
@@ -147,25 +280,19 @@ def generate_word_report(full_report, sheets_data):
     doc_buf.seek(0)
     return doc_buf
 
-# ----- Load API key
+# --------------- Load API key
 load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     st.error("GEMINI_API_KEY not found. Please set it in your environment variables or .env file.")
     st.stop()
 
-# ----- Page Configuration
-st.set_page_config(
-    page_title = "AI Report Generator",
-    page_icon = "📊",
-    layout = "wide"
-)
-
-# ----- Title
+# --------------- Page Configuration
+st.set_page_config(page_title = "AI Report Generator", page_icon = "📊", layout = "wide")
 st.title("📊 AI Report Generator")
 st.caption("Generate insights and business recommendations from your dataset using AI")
 
-# ----- Sidebar
+# --------------- Sidebar
 with st.sidebar:
     st.header("Settings")
     focus = st.text_area(
@@ -174,11 +301,24 @@ with st.sidebar:
         height = 175
     )
 
-# ----- File upload
+#  --------------- Session State Initialization 
+# Must be initialized before any widget that depends on them
+if "report_generated" not in st.session_state: # We use this to keep track of whether a report has been generated yet, so that we can conditionally show the follow-up question section and charts only after a report is generated.
+    st.session_state.report_generated = False
+if "full_report" not in st.session_state:
+    st.session_state.full_report = "" # We store the full report in session state so that we can refer back to it when answering follow-up questions, and also so that we can include it in the Word document download.
+if "report_context" not in st.session_state:
+    st.session_state.report_context = "" # We use report_context to store the context that we will provide to the model when answering follow-up questions. This can include the original report, and we could also choose to include additional context such as the original data summary or even the raw data if needed. For now, we will just include the full report as the context for follow-up questions, but this can be adjusted based on your needs and experimentation with what provides the best results for follow-up questions.
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = [] # We use chat_history to keep track of the conversation history for follow-up questions, so that we can provide that history as context to the model when answering follow-up questions. This allows the model to have the full context of the conversation and provide more coherent and relevant answers to follow-up questions.
+if "sheets_data_cache" not in st.session_state:
+    st.session_state.sheets_data_cache = {} # We use sheets_data_cache to store the original data from the uploaded sheets in session state, so that we can refer back to the original data when answering follow-up questions and generating charts for follow-up questions. This is important because the user might ask follow-up questions that require referencing the original data, and we want to have that data readily available in session state without needing to re-upload or re-process the file.
+
+# --------------- File upload
 uploaded_file = st.file_uploader("Upload your  CSV file or Excel file", type=["csv", "xlsx", "xls"])
 
 if uploaded_file:
-    # Load the file
+    # ----- Load the file
     file_name = uploaded_file.name
     if file_name.endswith(".csv"): 
         # CSV has only 1 sheet. Load it directly.
@@ -202,7 +342,7 @@ if uploaded_file:
             # Load the selected sheets into a dictionary
             sheets_data = {sheet: clean_dataframe(x1.parse(sheet)) for sheet in selected_sheet}
 
-    # Show quick stats and Preview the data for each sheet
+    # ----- Show quick stats and Preview the data for each sheet
     for sheet_name, df in sheets_data.items():
         if len(sheets_data) > 1:
             st.subheader(f"Sheet: {sheet_name}")
@@ -224,134 +364,17 @@ if uploaded_file:
     # We will use session state to keep track of the generated report and the conversation history for follow-up questions.
     if st.button("Generate Report", type = "primary", width = "stretch"):
         # Reset session state for new report generation
+       # Reset for new report
+        st.session_state.report_generated = False 
         st.session_state.chat_history = []
+        st.session_state.full_report = ""
         st.session_state.report_context = ""
+        st.session_state.sheets_data_cache = sheets_data
 
+        # --- Generate the report using Gemini
         with st.spinner("Analyzing your data with Gemini... (~15-30 seconds)"):
-
-            # Summarize the data
-            def summarize_dataframe(df):
-                lines = []
-                # Basic shape, column names and numeric stats, categorical columns and missing values
-                lines.append(f"Dataset: {df.shape[0]:,} rows x {df.shape[1]} columns")
-                
-                lines.append(f"\nColumns: {df.columns.tolist()}")
-                
-                numeric_columns = df.select_dtypes(include = 'number')
-                if not numeric_columns.empty:
-                    lines.append(f"\nNumeric Statistics: {numeric_columns.describe().round(2).to_string() }")
-                
-                categorical_columns = df.select_dtypes(include = ['object', 'string']).columns.tolist()
-                for col in categorical_columns[:5]:
-                    top = df[col].value_counts().head(5).to_dict()
-                    lines.append(f"\nTop values in '{col}': {top}")
-                
-                nulls = df.isnull().sum()
-                if nulls.any():
-                    lines.append(f"\nMissing values: {nulls[nulls > 0].to_dict()}")
-                
-                lines.append(f"\nSample rows: {df.head(5).to_string()}")
-                
-                return "\n".join(lines)
-
-            # Function to generate charts for a given dataframe and display in Streamlit
-            def charts_generator(df, sheet_name):
-                matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
-                
-                charts_created = 0
-
-                st.subheader(f"Auto Generated Charts for {sheet_name}" if len(sheets_data) > 1 else "Auto Generated Charts")
-
-                # Chart 1:  Distribution of numeric columns (histograms)
-                numeric_cols = df.select_dtypes(include = 'number').columns.tolist()
-                if numeric_cols:
-                    st.markdown("**Distribution of Numeric Columns**")
-                    # Show up to 4 columns
-                    cols_to_plot = numeric_cols[:4]
-                    fig, axes = plt.subplots(1, len(cols_to_plot), figsize = (5 * len(cols_to_plot), 4))
-
-                    # If only one column, axes is not a list, so we make it a list for consistency
-                    if len(cols_to_plot) == 1:
-                        axes = [axes]
-                    
-                    for ax, col in zip(axes, cols_to_plot):
-                        df[col].dropna().hist(ax = ax, bins = 20, color = 'skyblue', edgecolor = 'black')
-                        ax.set_title(col, fontsize = 10)
-                        ax.set_xlabel("")
-                        ax.tick_params(labelsize = 8)
-                    
-                    plt.tight_layout()
-                    st.pyplot(fig)
-                    plt.close(fig)
-                    charts_created += 1
-
-                # Chart 2: Bar chart of top categorical columns
-                categorical_cols = df.select_dtypes(include = ['object', 'string']).columns.tolist()
-
-                if categorical_cols:
-                    # pick the categorical column with the most unique values but less than 20 (to avoid overcrowded charts)
-                    best_cat_col = None
-                    for col in categorical_cols:
-                        unique_vals = df[col].nunique()
-                        if 1 < unique_vals <= 20:  # We want some variability but not too many unique values
-                            best_cat_col = col
-                            break
-                    
-                    if best_cat_col:
-                        st.markdown(f"**Distribution of Categorical Column: {best_cat_col}**")
-                        fig, ax = plt.subplots(figsize = (6, 4))
-                        top_values = df[best_cat_col].value_counts().head(10)
-                        top_values.plot(kind = 'bar', ax = ax, color = 'salmon', edgecolor = 'black')
-                        ax.set_title(f"Top Values in '{best_cat_col}'", fontsize = 10)
-                        ax.set_xlabel("")
-                        ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
-                        plt.tight_layout()
-                        st.pyplot(fig)
-                        plt.close(fig)
-                        charts_created += 1
-                
-                # Chart  3: Numeric vs Numeric (scatter plot)
-                if len(numeric_cols) >= 2:
-                    # Drop rows where either of the two columns is null to avoid issues in plotting
-                    scatter_df = df[[numeric_cols[0], numeric_cols[1]]].dropna()
-
-                    if len(scatter_df) > 0:  # Only plot if there are valid rows to plot
-                        st.markdown(f"**{numeric_cols[0]} vs {numeric_cols[1]}**")
-                        fig, ax = plt.subplots(figsize = (6, 4))
-                        ax.scatter(scatter_df[numeric_cols[0]], scatter_df[numeric_cols[1]], alpha = 0.5, color = 'lightgreen', s = 20, edgecolor = 'black')
-                        ax.set_xlabel(numeric_cols[0], fontsize = 8)
-                        ax.set_ylabel(numeric_cols[1], fontsize = 8)
-                        ax.set_title(f"{numeric_cols[0]} vs {numeric_cols[1]}", fontsize = 10)
-                        ax.tick_params(labelsize = 8)
-                        plt.tight_layout()
-                        st.pyplot(fig)
-                        plt.close(fig)
-                        charts_created += 1
-                
-                # Chart 4: Missing values bar chart (if there are missing values)
-                nulls = df.isnull().sum()
-                nulls = nulls[nulls > 0]
-
-                if not nulls.empty:
-                    st.markdown("**Missing Values Bar Chart**")
-                    fig, ax = plt.subplots(figsize = (6, 4))
-                    nulls.plot(kind = 'bar', ax = ax, color = 'lightcoral', edgecolor = 'black')
-                    ax.set_title("Missing Values by Column", fontsize = 10)
-                    ax.set_xlabel("Columns", fontsize = 8)
-                    ax.set_ylabel("Number of Missing Values", fontsize = 8)
-                    ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
-                    plt.tight_layout()
-                    st.pyplot(fig)
-                    plt.close(fig)
-                    charts_created += 1
-
-                # If no charts were created, show a message
-                if charts_created == 0:
-                    st.info("No suitable charts could be generated for this dataset. Try uploading a different file or adjusting the data.")
-
             # Initialize the llm
             llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
-
             # Generate a report for each sheet and combine them into one final report
             sheet_reports = {}
 
@@ -390,106 +413,113 @@ if uploaded_file:
                     full_report += f"\n{'='*50}\n\n"
                     full_report += report
 
-            # Save the full report in session state for follow-up questions
-            st.session_state.report_context = full_report  
-            # Reset chat history for follow-up questions when a new report is generated
-            st.session_state.chat_history = []  
+            # Store the full report and sheets data in session state so that we can refer back to it when answering follow-up questions and generating charts for follow-up questions
+            st.session_state.full_report = full_report
+            st.session_state.report_context = full_report  # We use the full report as the context for follow-up questions, but this can be adjusted based on your needs and experimentation with what provides the best results for follow-up questions. For example, you could choose to include the original data summary or even the raw data as part of the context for follow-up questions if you find that leads to better answers from the model.
+            st.session_state.report_generated = True  # We set this to True so that we can conditionally show the follow-up question section and charts only after a report has been generated. This helps to keep the UI clean and focused, and only show the relevant sections when they are applicable.
 
-            # Display report
-            st.success("Report generated successfully!")
-            st.markdown("---")
-            st.markdown(full_report)
-
-            # Auto-generated charts for each sheet
-            st.markdown("---")
-            for sheet_name, df in sheets_data.items():
-                charts_generator(df, sheet_name)
-
-            # Download button
-            st.markdown("### Download Report")
-            base_name = os.path.splitext(uploaded_file.name)[0]
-
-            # Provide both Word and Text download options side by side
-            col1, col2 = st.columns([1, 1])
-            # Text file download
-            with col1:            
-                st.download_button(
-                    label = "Download Report as Text File",
-                    data = full_report,
-                    file_name = f"{base_name}_Report.txt",
-                    mime = "text/plain",
-                    width = "stretch"
-                )
-            # Word document download
-            with col2:
-                with st.spinner("Generating Word document..."):
-                    doc_buf = generate_word_report(full_report, sheets_data)
-                    st.download_button(
-                        label = "Download Report as Word Document",
-                        data = doc_buf,
-                        file_name = f"{base_name}_Report.docx",
-                        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        width = "stretch"
-                    )
-
-            # Follow-up Questions
-            st.markdown("---")
-            st.markdown("### Any questions about the report or the data? Ask below!")
-            st.caption("You can ask for clarifications, deeper insights, or even request new charts based on the data.")
-
-            # Initialize session state for follow-up questions
-            # session_state persists across interactions, so we can keep track of the conversation history
-            if "chat_history" not in st.session_state:
-                st.session_state.chat_history = []
-
-            # We also store the full report in session state so that we can refer back to it when answering follow-up questions
-            if "report_context" not in st.session_state:
-                st.session_state.report_context = full_report
+    # ----- Display report
+    if st.session_state.report_generated: # We only show the report and charts if a report has been generated, to keep the UI clean and focused.
             
-            # Display existing chat history
-            for message in st.session_state.chat_history:
-                if message["role"] == "user":
-                    with st.chat_message("user"):
-                        st.markdown(f"**You:** {message['content']}")
-                else:
-                    with st.chat_message("Assistant"):
-                        st.markdown(f"**Assistant:** {message['content']}")
+        st.success("Report generated successfully!")
+        st.markdown("---")
+        st.markdown(st.session_state.full_report)
 
-            # Input chat message
-            user_input = st.chat_input("Type your question here... ")
-            if user_input:
-                # Show user's message in the chat
+        # --- Auto-generated charts for each sheet
+        st.markdown("---")
+        for sheet_name, df in sheets_data.items():
+            charts_generator(df, sheet_name, st.session_state.sheets_data_cache) # We pass the original sheets data from session state to the charts generator, so that we can refer back to the original data when generating charts for follow-up questions.
+
+        # --- Download button
+        st.markdown("---")
+        st.markdown("### Download Report")
+        base_name = os.path.splitext(uploaded_file.name)[0]
+
+        # Provide both Word and Text download options side by side
+        col1, col2 = st.columns([1, 1])
+        # Text file download
+        with col1:            
+            st.download_button(
+            label = "Download Report as Text File",
+            data = st.session_state.full_report,
+            file_name = f"{base_name}_Report.txt",
+            mime = "text/plain",
+            width = "stretch"
+            )
+        # Word document download
+        with col2:
+            doc_buf = generate_word_report(st.session_state.full_report, st.session_state.sheets_data_cache)
+            st.download_button(
+            label = "Download Report as Word Document",
+            data = doc_buf,
+            file_name = f"{base_name}_Report.docx",
+            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            width = "stretch"
+            )
+
+        # --- Follow-up Questions
+        st.markdown("---")
+        st.markdown("### Any questions about the report or the data? Ask below!")
+        st.caption("You can ask for clarifications, deeper insights, or even request new charts based on the data.")
+            
+        # Display existing chat history
+        for message in st.session_state.chat_history:
+            if message["role"] == "user":
                 with st.chat_message("user"):
-                    st.markdown(user_input)
-
-                # Build the message history for the LLM, including the system prompt, the original report context, and the user's follow-up question
-                messages = [
-                    SystemMessage(content  = """You are a senior data analyst. You have already provided a detailed report based on a dataset.
-                                   Now, you are answering follow-up questions about the report and the data.
-                                   Be specific, reference actual numbers and refer back to the report context when needed."""),
-
-                    HumanMessage(content = f"""Here is the original report you generated for reference:\n\n{st.session_state.report_context}
-                                 \n\nAnswer this follow-up question based on the report and data: {user_input}""")
-                ]
-                
-                # Add the previous conversation history to the messages so that the model has the full context of the conversation
-                for msg in st.session_state.chat_history:
-                    if msg["role"] == "user":
-                        messages.append(HumanMessage(content = msg["content"]))
-                    else:
-                        messages.append(SystemMessage(content = msg["content"]))
-
-                # Add the new question to the chat history
-                messages.append(HumanMessage(content = user_input))
-
-                # Get the model's response to the follow-up question
+                    st.markdown(f"**You:** {message['content']}")
+            else:
                 with st.chat_message("Assistant"):
-                    with st.spinner("Thinking..."):
-                        response = llm.invoke(messages)
-                        ai_response = response.content[0]['text']
-                        st.markdown(ai_response)
+                    st.markdown(f"**Assistant:** {message['content']}")
 
-                # Save both the user's question and the AI's response to the chat history in session state
-                st.session_state.chat_history.append({"role": "user", "content": user_input})
-                st.session_state.chat_history.append({"role": "Assistant", "content": ai_response})
+        # Input chat message
+        user_input = st.chat_input("Type your question here... ")
+        if user_input:
+            # Show user's message in the chat
+            with st.chat_message("user"):
+                st.markdown(user_input)
 
+            # Build the message history for the LLM, including the system prompt, the original report context, and the user's follow-up question
+            messages = [
+                SystemMessage(content  = """You are a senior data analyst who generated a report.
+
+                            IMPORTANT RULES:
+                            1. Answer each question directly and independently
+                            2. Only reference previous questions if the current question is clearly related to them
+                            3. If the question is about a new topic, answer it fresh without bringing up previous topics
+                            4. Always reference specific numbers from the report when relevant
+                            5. Be concise and clear
+                            6. If you are unsure about something, say so clearly rather than guessing
+                            7. If the user asks for simpler explanation, avoid technical jargon and use real-world analogies
+                            8. If the user asks a question that cannot be answered from the report, say so and explain what data would be needed"""),
+
+                HumanMessage(content = f"""Here is the original report you generated for reference:\n\n{st.session_state.report_context}"""),
+
+                AIMessage(content = """Understood. I have the original report for reference. I have read and understood the report. 
+                          I am ready to answer follow-up questions based on that report. Please provide the follow-up question.""")
+            ]
+            
+            # We then add the recent chat history to the messages that we will pass to the model, so that it has the context of the conversation when answering the follow-up question. 
+            # However, we only pass a limited number of recent messages to avoid overwhelming the model with too much context and to keep the conversation focused on the most relevant information. 
+            # In this case, we will pass the last 8 messages (4 exchanges) as context for the model when answering the follow-up question.
+            recent_history = st.session_state.chat_history[-8:]
+
+            for msg in recent_history:
+                if msg["role"] == "user":
+                    messages.append(HumanMessage(content = msg["content"]))
+                else:
+                    messages.append(AIMessage(content = msg["content"]))
+
+            # New question always last
+            messages.append(HumanMessage(content = user_input))
+
+            # Get the model's response to the follow-up question
+            with st.chat_message("Assistant"):
+                with st.spinner("Thinking..."):
+                    llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+                    response = llm.invoke(messages)
+                    ai_response = response.content[0]['text']
+                    st.markdown(ai_response)
+
+            # Save both the user's question and the AI's response to the chat history in session state
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            st.session_state.chat_history.append({"role": "Assistant", "content": ai_response})
