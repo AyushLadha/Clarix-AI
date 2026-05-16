@@ -390,6 +390,11 @@ if uploaded_file:
                     full_report += f"\n{'='*50}\n\n"
                     full_report += report
 
+            # Save the full report in session state for follow-up questions
+            st.session_state.report_context = full_report  
+            # Reset chat history for follow-up questions when a new report is generated
+            st.session_state.chat_history = []  
+
             # Display report
             st.success("Report generated successfully!")
             st.markdown("---")
