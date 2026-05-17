@@ -302,6 +302,7 @@ with st.sidebar:
     )
 
 #  --------------- Session State Initialization 
+
 # Must be initialized before any widget that depends on them
 if "report_generated" not in st.session_state: # We use this to keep track of whether a report has been generated yet, so that we can conditionally show the follow-up question section and charts only after a report is generated.
     st.session_state.report_generated = False
@@ -313,9 +314,37 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = [] # We use chat_history to keep track of the conversation history for follow-up questions, so that we can provide that history as context to the model when answering follow-up questions. This allows the model to have the full context of the conversation and provide more coherent and relevant answers to follow-up questions.
 if "sheets_data_cache" not in st.session_state:
     st.session_state.sheets_data_cache = {} # We use sheets_data_cache to store the original data from the uploaded sheets in session state, so that we can refer back to the original data when answering follow-up questions and generating charts for follow-up questions. This is important because the user might ask follow-up questions that require referencing the original data, and we want to have that data readily available in session state without needing to re-upload or re-process the file.
+if "current_file" not in st.session_state:
+    st.session_state.current_file = None # We keep track of the name of the currently uploaded file in session state, so that we can detect when the user uploads a new file and reset the session state accordingly. This is important because if the user uploads a new file, we want to make sure that we clear out any previous report, data, and chat history that was related to the old file, to avoid confusion and ensure that the app is always showing information relevant to the currently uploaded file.
 
 # --------------- File upload
 uploaded_file = st.file_uploader("Upload your  CSV file or Excel file", type=["csv", "xlsx", "xls"])
+
+# Reset session state if no file is uploaded, to clear out any previous report and data when the user removes the uploaded file or uploads a new file. 
+# This ensures that the app is always in a clean state when starting to analyze a new dataset, and prevents any confusion from leftover data or reports from previous uploads. 
+# It also helps to manage memory usage by clearing out old data that is no longer needed when a new file is uploaded.
+if uploaded_file is None:
+    # No file uploaded — reset everything
+    st.session_state.report_generated = False
+    st.session_state.full_report = ""
+    st.session_state.report_context = ""
+    st.session_state.chat_history = []
+    st.session_state.sheets_data_cache = {} 
+    st.session_state.current_file = None
+
+# We also keep track of the name of the currently uploaded file in session state, so that we can detect when the user uploads a new file and reset the session state accordingly. 
+# This is important because if the user uploads a new file, we want to make sure that we clear out any previous report, data, and chat history that was related to the old file, 
+# to avoid confusion and ensure that the app is always showing information relevant to the currently uploaded file.
+
+if uploaded_file is not None:
+    # If a different file is uploaded, reset everything
+    if st.session_state.current_file != uploaded_file.name:
+        st.session_state.current_file = uploaded_file.name
+        st.session_state.report_generated = False
+        st.session_state.full_report = ""
+        st.session_state.report_context = ""
+        st.session_state.chat_history = []
+        st.session_state.sheets_data_cache = {} 
 
 if uploaded_file:
     # ----- Load the file
@@ -359,6 +388,7 @@ if uploaded_file:
     st.divider()
 
     # ----- Generate Button 
+
     # When the user clicks the button, we will generate the report using Gemini and display it on the page. 
     # We will also generate some auto-charts based on the data and include them in the report.
     # We will use session state to keep track of the generated report and the conversation history for follow-up questions.
