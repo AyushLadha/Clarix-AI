@@ -182,7 +182,7 @@ def generate_word_report(full_report, sheets_data):
     for line in full_report.split('\n'):
         line = line.strip()
         if not line:
-            doc.add_paragraph()
+            pass # Add a blank line for spacing
         elif line.startswith('## '):
             doc.add_heading(line.replace('## ', ''), level = 2)
         elif line.startswith('# '):
