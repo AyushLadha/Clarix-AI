@@ -13,7 +13,7 @@ def clean_dataframe(df):
     """Fix mixed type columns that cause Arrow/PyArrow errors in Streamlit"""
     for col in df.columns:
         # If column is object type but has mixed int/str values — convert all to str
-        if df[col].dtype == ['object', 'string']:
+        if df[col].dtype == 'object':
             df[col] = df[col].astype(str)
     return df
 
@@ -30,22 +30,35 @@ def summarize_dataframe(df):
         lines.append(f"\nNumeric Statistics: {numeric_columns.describe().round(2).to_string() }")
                 
     categorical_columns = df.select_dtypes(include = ['object', 'string']).columns.tolist()
-    # Priority columns — always include these if they exist
-    priority_keywords = ['country', 'region', 'territory', 'city', 'state',
-                         'continent', 'location', 'area', 'zone', 'gender',
-                         'category', 'segment', 'occupation', 'product']
 
-    priority_cols = [col for col in categorical_columns
-                     if any(kw in col.lower() for kw in priority_keywords)]
+     # For categorical columns, we want to show the distribution of values for the top categorical columns, 
+     # so that we can get a sense of what the data looks like and what kind of insights we might be able to generate from it.
+    for col in categorical_columns:
+        top = df[col].value_counts().head(10).to_dict()
+        lines.append(f"\nTransaction/record count by '{col}':\n{top}")
 
-    other_cols = [col for col in categorical_columns if col not in priority_cols]
+    # For grouping and aggregation, we want to pick categorical columns that have a reasonable number of unique values (not too many, not too few) 
+    # to avoid overwhelming the model with too much information or having meaningless groupings.
+    good_group_cols = [
+        col for col in categorical_columns
+        if 2 <= df[col].nunique() <= 30  # sweet spot for grouping
+    ]
+    # For aggregation columns, we want to pick numeric columns that have a good amount of variability and are not just identifiers or constant values, 
+    # as those would not provide meaningful insights when aggregated.
+    good_agg_cols = numeric_columns.columns.tolist()
 
-    # Show priority columns first, then fill remaining slots with others
-    cols_to_show = (priority_cols + other_cols)
-
-    for col in cols_to_show:
-        top = df[col].value_counts().head(5).to_dict()
-        lines.append(f"\nTop values in '{col}': {top}")
+    # We will show some sample aggregations by key groups to give the model a sense of what kind of insights can be generated from the data, 
+    # and to provide it with some specific examples of trends and patterns in the data that it can reference when generating the report.
+    if good_group_cols and good_agg_cols:
+        lines.append(f"\n--- Aggregations by Key Groups ---")
+        for group_col in good_group_cols[:5]:   # top 5 grouping cols
+            for agg_col in good_agg_cols[:5]:   # top 5 numeric cols
+                try:
+                    agg = df.groupby(group_col)[agg_col].agg(['sum', 'mean', 'count'])
+                    agg = agg.sort_values('sum', ascending=False).head(10).round(2)
+                    lines.append(f"\n{agg_col} by {group_col}:\n{agg.to_string()}")
+                except:
+                    pass
                 
     nulls = df.isnull().sum()
     if nulls.any():
@@ -376,11 +389,12 @@ if uploaded_file:
         if len(sheets_data) > 1:
             st.subheader(f"Sheet: {sheet_name}")
 
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric("Rows", f"{df.shape[0]:,}")
         col2.metric("Columns", f"{df.shape[1]:,}")
         col3.metric("Numeric Columns", f"{df.select_dtypes(include='number').shape[1]}")
-        col4.metric("Missing Values", f"{df.isnull().sum().sum():,}")
+        col4.metric("Categorical Columns", f"{df.select_dtypes(include=['object', 'string']).shape[1]}")
+        col5.metric("Missing Values", f"{df.isnull().sum().sum():,}")
 
         with st.expander(f"Preview - {sheet_name}", expanded = True):
             st.dataframe(df.head(10), width = "stretch")
@@ -500,7 +514,7 @@ if uploaded_file:
             else:
                 with st.chat_message("Assistant"):
                     st.markdown(f"**Assistant:** {message['content']}")
-
+        
         # Input chat message
         user_input = st.chat_input("Type your question here... ")
         if user_input:
