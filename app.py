@@ -532,10 +532,10 @@ if uploaded_file:
         st.markdown("---")
         st.markdown(st.session_state.full_report)
 
-        with st.spinner("Generating charts based on your data..."):
-            llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
-            for sheet_name, df in st.session_state.sheets_data_cache.items():
-                charts_generator(df, sheet_name, st.session_state.sheets_data_cache, llm)
+        # --- Generate charts for each sheet and display them
+        llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+        for sheet_name, df in st.session_state.sheets_data_cache.items():
+            charts_generator(df, sheet_name, st.session_state.sheets_data_cache, llm)
 
         # Download buttons for both Word and Text formats
         st.markdown("---")
