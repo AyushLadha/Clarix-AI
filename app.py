@@ -68,105 +68,163 @@ def summarize_dataframe(df):
                 
     return "\n".join(lines)
 
+def get_chart_columns(df, llm):
+    # We will use the LLM to help us identify which columns might be most interesting to generate charts for, based on the data summary and the column names. 
+    # This way, we can leverage the model's understanding of the data and its ability to identify patterns and trends to guide our chart generation, 
+    # rather than just relying on arbitrary rules for picking columns.
+    """Ask the LLM to identify which columns in the dataset would be most interesting and insightful to generate charts for, based on the data summary and column names."""
+
+    numeric_columns = df.select_dtypes(include = 'number').columns.tolist()
+    categorical_columns = df.select_dtypes(include = ['object', 'string']).columns.tolist()
+
+    col_info = f"""
+                Numeric columns: {numeric_columns}
+                Categorical columns: {categorical_columns}
+
+                Sample data:
+                {df.head(10).to_string()}
+
+                Numeric stats:
+                {df[numeric_columns].describe().round(2).to_string()}
+                """
+
+    messages = [
+        SystemMessage(content = """You are a data visualization expert. You are given a summary of a dataset, including the column names, data types, and some sample data.
+                      Given a list of columns, you should identify which ones would be most interesting and insightful to generate charts for, based on the data summary and column names.
+                      RULES:
+                        - NEVER pick ID columns (customer_id, product_key, order_id etc)
+                        - NEVER pick code columns (zip_code, postal_code etc)
+                        - NEVER pick index columns
+                        - NEVER pick date/time columns for scatter or histogram
+                        - DO pick metric columns (revenue, profit, salary, sales, quantity, score etc)
+                        - DO pick meaningful categorical columns (country, department, category, gender etc)
+                        - DO pick time columns ONLY for trend charts (year, month)
+
+                        Respond ONLY in this exact JSON format, no other text:
+                        {
+                            "histogram_cols": ["col1", "col2", "col3", "col4"],
+                            "bar_chart_col": "col1",
+                            "scatter_x": "col1",
+                            "scatter_y": "col2",
+                            "reasoning": "brief explanation"
+                        }
+                        If you cannot find suitable columns for a particular chart type, return an empty list or null for that field, 
+                      but still provide reasoning in the response about why you couldn't find suitable columns for that chart type."""),
+
+        HumanMessage(content = f"Pick the best columns for charts from this dataset:\n\n{col_info}.")
+    ]
+
+    response = llm.invoke(messages)
+    try:
+        import json
+        # Clean response and parse JSON
+        text = response.content[0]['text']
+        text = text.replace('```json', '').replace('```', '').strip()
+        result = json.loads(text)
+        return result
+    except:
+        # Fallback if Gemini doesn't return valid JSON
+        return None
+
 # --------------- Function to generate charts for a given dataframe and display in Streamlit
-def charts_generator(df, sheet_name, sheets_data):
+def charts_generator(df, sheet_name, sheets_data, llm):
     matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
                 
     charts_created = 0
 
     st.subheader(f"Auto Generated Charts for {sheet_name}" if len(sheets_data) > 1 else "Auto Generated Charts")
 
-    # Chart 1:  Distribution of numeric columns (histograms)
-    numeric_cols = df.select_dtypes(include = 'number').columns.tolist()
-    if numeric_cols:
-        st.markdown("**Distribution of Numeric Columns**")
-        # Show up to 4 columns
-        cols_to_plot = numeric_cols[:4]
-        fig, axes = plt.subplots(1, len(cols_to_plot), figsize = (5 * len(cols_to_plot), 4))
+    with st.spinner("Generating charts based on your data..."):
+        chart_cols = get_chart_columns(df,llm)
 
-        # If only one column, axes is not a list, so we make it a list for consistency
-        if len(cols_to_plot) == 1:
-            axes = [axes]
+    if chart_cols:
+        st.caption(f"Charts generated based on the model's analysis of the data. Reasoning: {chart_cols.get('reasoning', 'No reasoning provided')}")
+
+        # Chart 1:  Distribution of numeric columns (histograms)
+        hist_cols = [col for col in chart_cols.get('histogram_cols', []) if col in df.columns]
+        if hist_cols:
+            st.markdown("**Distribution of Numeric Columns**")
+            # Show up to 4 columns
+            cols_to_plot = hist_cols[:4]
+            fig, axes = plt.subplots(1, len(cols_to_plot), figsize = (5 * len(cols_to_plot), 4))
+
+            # If only one column, axes is not a list, so we make it a list for consistency
+            if len(cols_to_plot) == 1:
+                axes = [axes]
                     
-        for ax, col in zip(axes, cols_to_plot):
-            df[col].dropna().hist(ax = ax, bins = 20, color = 'skyblue', edgecolor = 'black')
-            ax.set_title(col, fontsize = 10)
-            ax.set_xlabel("")
-            ax.tick_params(labelsize = 8)
+            for ax, col in zip(axes, cols_to_plot):
+                df[col].dropna().hist(ax = ax, bins = 20, color = 'skyblue', edgecolor = 'black')
+                ax.set_title(col, fontsize = 10)
+                ax.set_xlabel("", fontsize = 8)
+                ax.set_ylabel("Count", fontsize = 8)
+                ax.tick_params(labelsize = 8)
                     
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-        charts_created += 1
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+            charts_created += 1
 
-    # Chart 2: Bar chart of top categorical columns
-    categorical_cols = df.select_dtypes(include = ['object', 'string']).columns.tolist()
-
-    if categorical_cols:
-    # pick the categorical column with the most unique values but less than 20 (to avoid overcrowded charts)
-        best_cat_col = None
-    for col in categorical_cols:
-        unique_vals = df[col].nunique()
-        if 1 < unique_vals <= 20:  # We want some variability but not too many unique values
-            best_cat_col = col
-            break
-                    
-    if best_cat_col:
-        st.markdown(f"**Distribution of Categorical Column: {best_cat_col}**")
-        fig, ax = plt.subplots(figsize = (6, 4))
-        top_values = df[best_cat_col].value_counts().head(10)
-        top_values.plot(kind = 'bar', ax = ax, color = 'salmon', edgecolor = 'black')
-        ax.set_title(f"Top Values in '{best_cat_col}'", fontsize = 10)
-        ax.set_xlabel("")
-        ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-        charts_created += 1
-                
-    # Chart  3: Numeric vs Numeric (scatter plot)
-    if len(numeric_cols) >= 2:
-        # Drop rows where either of the two columns is null to avoid issues in plotting
-        scatter_df = df[[numeric_cols[0], numeric_cols[1]]].dropna()
-
-        if len(scatter_df) > 0:  # Only plot if there are valid rows to plot
-            st.markdown(f"**{numeric_cols[0]} vs {numeric_cols[1]}**")
+        # Chart 2: Bar chart of top categorical columns
+        bar_columns = chart_cols.get('bar_chart_col')
+        if bar_columns and bar_columns in df.columns:
+            st.markdown(f"**Distribution of Categorical Column: {bar_columns}**")
             fig, ax = plt.subplots(figsize = (6, 4))
-            ax.scatter(scatter_df[numeric_cols[0]], scatter_df[numeric_cols[1]], alpha = 0.5, color = 'lightgreen', s = 20, edgecolor = 'black')
-            ax.set_xlabel(numeric_cols[0], fontsize = 8)
-            ax.set_ylabel(numeric_cols[1], fontsize = 8)
-            ax.set_title(f"{numeric_cols[0]} vs {numeric_cols[1]}", fontsize = 10)
-            ax.tick_params(labelsize = 8)
+            top_values = df[bar_columns].value_counts().head(10)
+            top_values.plot(kind = 'bar', ax = ax, color = 'salmon', edgecolor = 'black')
+            ax.set_title(f"Top Values in '{bar_columns}'", fontsize = 10)
+            ax.set_xlabel("")
+            ax.set_ylabel("Number of Records", fontsize = 8)
+            ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
             plt.tight_layout()
             st.pyplot(fig)
             plt.close(fig)
             charts_created += 1
                 
-    # Chart 4: Missing values bar chart (if there are missing values)
-    nulls = df.isnull().sum()
-    nulls = nulls[nulls > 0]
+        # Chart  3: Numeric vs Numeric (scatter plot)
+        scatter_x = chart_cols.get('scatter_x')
+        scatter_y = chart_cols.get('scatter_y')
 
-    if not nulls.empty:
-        st.markdown("**Missing Values Bar Chart**")
-        fig, ax = plt.subplots(figsize = (6, 4))
-        nulls.plot(kind = 'bar', ax = ax, color = 'lightcoral', edgecolor = 'black')
-        ax.set_title("Missing Values by Column", fontsize = 10)
-        ax.set_xlabel("Columns", fontsize = 8)
-        ax.set_ylabel("Number of Missing Values", fontsize = 8)
-        ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close(fig)
-        charts_created += 1
+        if scatter_x and scatter_y and scatter_x in df.columns and scatter_y in df.columns:
+            scatter_df = df[[scatter_x, scatter_y]].dropna()
+
+            if len(scatter_df) > 0:  # Only plot if there are valid rows to plot
+                st.markdown(f"**{scatter_x} vs {scatter_y}**")
+                fig, ax = plt.subplots(figsize = (6, 4))
+                ax.scatter(scatter_df[scatter_x], scatter_df[scatter_y], alpha = 0.5, color = 'lightgreen', s = 20, edgecolor = 'black')
+                ax.set_xlabel(scatter_x, fontsize = 8)
+                ax.set_ylabel(scatter_y, fontsize = 8)
+                ax.set_title(f"{scatter_x} vs {scatter_y}", fontsize = 10)
+                ax.tick_params(labelsize = 8)
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close(fig)
+                charts_created += 1
+                
+        # Chart 4: Missing values bar chart (if there are missing values)
+        nulls = df.isnull().sum()
+        nulls = nulls[nulls > 0]
+
+        if not nulls.empty:
+            st.markdown("**Missing Values Bar Chart**")
+            fig, ax = plt.subplots(figsize = (6, 4))
+            nulls.plot(kind = 'bar', ax = ax, color = 'lightcoral', edgecolor = 'black')
+            ax.set_title("Missing Values by Column", fontsize = 10)
+            ax.set_xlabel("Columns", fontsize = 8)
+            ax.set_ylabel("Number of Missing Values", fontsize = 8)
+            ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close(fig)
+            charts_created += 1
 
     # If no charts were created, show a message
     if charts_created == 0:
         st.info("No suitable charts could be generated for this dataset. Try uploading a different file or adjusting the data.")
 
 # --------------- Function to generate Word report with charts
-def generate_word_report(full_report, sheets_data):
+def generate_word_report(full_report, sheets_data, llm):
     from docx import Document
-    from docx.shared import Inches, Pt, RGBColor
+    from docx.shared import Inches
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     import io
     matplotlib.use('Agg')
@@ -202,90 +260,85 @@ def generate_word_report(full_report, sheets_data):
         if len(sheets_data) > 1:
             doc.add_heading(f'Charts - {sheet_name}', level=2)
 
-        numeric_cols = df.select_dtypes(include = 'number').columns.tolist()
-        cat_cols = df.select_dtypes(include = ['object', 'string']).columns.tolist()
-
-        # Chart 1: Numeric distributions
-        if numeric_cols:
-            cols_to_plot = numeric_cols[:4]
-            fig, axes = plt.subplots(1, len(cols_to_plot), figsize = (5 * len(cols_to_plot), 4))
-            if len(cols_to_plot) == 1:
-                axes = [axes]
-            for ax, col in zip(axes, cols_to_plot):
-                df[col].dropna().hist(ax = ax, bins = 20, color = '#4f46e5', edgecolor = 'white')
-                ax.set_title(col, fontsize = 11)
-                ax.tick_params(labelsize = 9)
-            plt.tight_layout()
-
-            # Save chart to memory buffer and insert into Word
-            buf = io.BytesIO()
-            fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
-            buf.seek(0)
-            doc.add_paragraph('Numeric Column Distributions').runs[0].bold = True
-            doc.add_picture(buf, width=Inches(6))
-            plt.close()
-
-        # Chart 2: Top categorical bar chart
-        best_cat = None
-        for col in cat_cols:
-            if df[col].nunique() != 'nan' and 2 <= df[col].nunique() <= 15:
-                best_cat = col
-                break
-
-        if best_cat:
-            fig, ax = plt.subplots(figsize=(7, 4))
-            df[best_cat].value_counts().head(10).plot(
-                kind = 'bar', ax = ax, color = '#4f46e5', edgecolor = 'white'
-            )
-            ax.set_title(f"Top values in '{best_cat}'", fontsize=11)
-            ax.tick_params(axis = 'x', rotation = 45, labelsize = 9)
-            plt.tight_layout()
-
-            buf = io.BytesIO()
-            fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
-            buf.seek(0)
-            doc.add_paragraph(f'Top Values — {best_cat}').runs[0].bold = True
-            doc.add_picture(buf, width = Inches(6))
-            plt.close()
-
-        # Chart 3: Scatter plot
-        if len(numeric_cols) >= 2:
-            scatter_df = df[[numeric_cols[0], numeric_cols[1]]].dropna()
-            if len(scatter_df) > 0:
-                fig, ax = plt.subplots(figsize=(7, 4))
-                ax.scatter(
-                    scatter_df[numeric_cols[0]],
-                    scatter_df[numeric_cols[1]],
-                    alpha = 0.4, color = '#4f46e5', s = 15
-                )
-                ax.set_xlabel(numeric_cols[0], fontsize = 10)
-                ax.set_ylabel(numeric_cols[1], fontsize = 10)
-                ax.set_title(f"{numeric_cols[0]} vs {numeric_cols[1]}", fontsize = 11)
+        chart_cols = get_chart_columns(df, llm)
+        if chart_cols:
+            hist_cols = [col for col in chart_cols.get('histogram_cols', []) if col in df.columns]
+            bar_cols = chart_cols.get('bar_chart_col')
+            scatter_x = chart_cols.get('scatter_x')
+            scatter_y = chart_cols.get('scatter_y')
+              # We can pass None for the LLM here since we are just reusing the columns identified during the initial report generation. Alternatively, we could choose to call the LLM again to get fresh column recommendations for the Word report, but for simplicity we will just reuse the same columns that were identified during the initial report generation.
+            # Chart 1: Numeric distributions
+            if hist_cols:
+                cols_to_plot = hist_cols[:4]
+                fig, axes = plt.subplots(1, len(cols_to_plot), figsize = (5 * len(cols_to_plot), 4))
+                if len(cols_to_plot) == 1:
+                    axes = [axes]
+                for ax, col in zip(axes, cols_to_plot):
+                    df[col].dropna().hist(ax = ax, bins = 20, color = 'skyblue', edgecolor = 'white')
+                    ax.set_title(col, fontsize = 11)
+                    ax.set_xlabel("", fontsize = 9)
+                    ax.set_ylabel("Count", fontsize = 9)
+                    ax.tick_params(labelsize = 9)
                 plt.tight_layout()
 
+                # Save chart to memory buffer and insert into Word
                 buf = io.BytesIO()
                 fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
                 buf.seek(0)
-                doc.add_paragraph(f'{numeric_cols[0]} vs {numeric_cols[1]}').runs[0].bold = True
+                doc.add_paragraph('Numeric Column Distributions').runs[0].bold = True
+                doc.add_picture(buf, width=Inches(6))
+                plt.close()
+
+            # Chart 2: Top categorical bar chart
+            if bar_cols and bar_cols in df.columns:
+                fig, ax = plt.subplots(figsize=(7, 4))
+                df[bar_cols].value_counts().head(10).plot(kind = 'bar', ax = ax, color = 'salmon', edgecolor = 'white')
+                ax.set_title(f"Top values in '{bar_cols}'", fontsize=11)
+                ax.tick_params(axis = 'x', rotation = 45, labelsize = 9)
+                plt.tight_layout()
+                buf = io.BytesIO()
+                fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+                buf.seek(0)
+                doc.add_paragraph(f'Top Values — {bar_cols}').runs[0].bold = True
                 doc.add_picture(buf, width = Inches(6))
                 plt.close()
 
-        # Chart 4: Missing values
-        nulls = df.isnull().sum()
-        nulls = nulls[nulls > 0]
-        if not nulls.empty:
-            fig, ax = plt.subplots(figsize=(7, 3))
-            nulls.plot(kind = 'bar', ax = ax, color = '#e11d48', edgecolor = 'white')
-            ax.set_title("Missing values per column", fontsize = 11)
-            ax.tick_params(axis = 'x', rotation = 45, labelsize = 9)
-            plt.tight_layout()
+            # Chart 3: Scatter plot
+            if scatter_x and scatter_y and scatter_x in df.columns and scatter_y in df.columns:
+                scatter_df = df[[scatter_x, scatter_y]].dropna()
+                if len(scatter_df) > 0:
+                    fig, ax = plt.subplots(figsize=(7, 4))
+                    ax.scatter(
+                    scatter_df[scatter_x],
+                    scatter_df[scatter_y],
+                    alpha = 0.4, color = 'lightgreen', s = 15
+                    )
+                    ax.set_xlabel(scatter_x, fontsize = 10)
+                    ax.set_ylabel(scatter_y, fontsize = 10)
+                    ax.set_title(f"{scatter_x} vs {scatter_y}", fontsize = 11)
+                    plt.tight_layout()
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+                    buf.seek(0)
+                    doc.add_paragraph(f'{scatter_x} vs {scatter_y}').runs[0].bold = True
+                    doc.add_picture(buf, width = Inches(6))
+                    plt.close()
 
-            buf = io.BytesIO()
-            fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
-            buf.seek(0)
-            doc.add_paragraph('Missing Values per Column').runs[0].bold = True
-            doc.add_picture(buf, width = Inches(6))
-            plt.close()
+            # Chart 4: Missing values
+            nulls = df.isnull().sum()
+            nulls = nulls[nulls > 0]
+            if not nulls.empty:
+                fig, ax = plt.subplots(figsize=(7, 3))
+                nulls.plot(kind = 'bar', ax = ax, color = 'lightcoral', edgecolor = 'white')
+                ax.set_title("Missing values per column", fontsize = 11)
+                ax.tick_params(axis = 'x', rotation = 45, labelsize = 9)
+                plt.tight_layout()
+                buf = io.BytesIO()
+                fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+                buf.seek(0)
+                doc.add_paragraph('Missing Values per Column').runs[0].bold = True
+                doc.add_picture(buf, width = Inches(6))
+                plt.close()
 
     # Save the Word document to a BytesIO buffer and return it for download
     doc_buf = io.BytesIO()
@@ -423,7 +476,7 @@ if uploaded_file:
             sheet_reports = {}
 
             # Loop through each sheet and generate a report for it
-            for sheet_name, df in sheets_data.items(): 
+            for sheet_name, df in sheets_data.items():
                 # Summarize the data for the current sheet
                 summary = summarize_dataframe(df) 
 
@@ -461,7 +514,8 @@ if uploaded_file:
             st.session_state.full_report = full_report
             st.session_state.report_context = full_report  # We use the full report as the context for follow-up questions, but this can be adjusted based on your needs and experimentation with what provides the best results for follow-up questions. For example, you could choose to include the original data summary or even the raw data as part of the context for follow-up questions if you find that leads to better answers from the model.
             st.session_state.report_generated = True  # We set this to True so that we can conditionally show the follow-up question section and charts only after a report has been generated. This helps to keep the UI clean and focused, and only show the relevant sections when they are applicable.
-
+        st.rerun()
+    
     # ----- Display report
     if st.session_state.report_generated: # We only show the report and charts if a report has been generated, to keep the UI clean and focused.
             
@@ -469,12 +523,11 @@ if uploaded_file:
         st.markdown("---")
         st.markdown(st.session_state.full_report)
 
-        # --- Auto-generated charts for each sheet
-        st.markdown("---")
-        for sheet_name, df in sheets_data.items():
-            charts_generator(df, sheet_name, st.session_state.sheets_data_cache) # We pass the original sheets data from session state to the charts generator, so that we can refer back to the original data when generating charts for follow-up questions.
+        llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+        for sheet_name, df in st.session_state.sheets_data_cache.items():
+            charts_generator(df, sheet_name, st.session_state.sheets_data_cache, llm)
 
-        # --- Download button
+        # Download buttons for both Word and Text formats
         st.markdown("---")
         st.markdown("### Download Report")
         base_name = os.path.splitext(uploaded_file.name)[0]
@@ -492,7 +545,7 @@ if uploaded_file:
             )
         # Word document download
         with col2:
-            doc_buf = generate_word_report(st.session_state.full_report, st.session_state.sheets_data_cache)
+            doc_buf = generate_word_report(st.session_state.full_report, st.session_state.sheets_data_cache, llm)
             st.download_button(
             label = "Download Report as Word Document",
             data = doc_buf,
