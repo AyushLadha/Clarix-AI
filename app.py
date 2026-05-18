@@ -117,13 +117,12 @@ def get_chart_columns(df, llm):
     response = llm.invoke(messages)
     try:
         import json
-        # Clean response and parse JSON
         text = response.content[0]['text']
         text = text.replace('```json', '').replace('```', '').strip()
         result = json.loads(text)
         return result
-    except:
-        # Fallback if Gemini doesn't return valid JSON
+    except Exception as e:
+        st.warning("AI could not select chart columns — using fallback method.")
         return None
 
 # --------------- Function to generate charts for a given dataframe and display in Streamlit
@@ -437,6 +436,13 @@ if uploaded_file:
             # Load the selected sheets into a dictionary
             sheets_data = {sheet: clean_dataframe(x1.parse(sheet)) for sheet in selected_sheet}
 
+            for sheet_name, df in selected_sheet.items():
+                row_count = df.shape[0]
+                if row_count > 500000:
+                    st.warning(f"Sheet '{sheet_name}' contains {row_count:,} rows, which may impact performance.")
+                elif row_count > 100000:
+                    st.info(f"Sheet '{sheet_name}' contains {row_count:,} rows. Performance may be slower with larger datasets.")
+
     # ----- Show quick stats and Preview the data for each sheet
     for sheet_name, df in sheets_data.items():
         if len(sheets_data) > 1:
@@ -493,9 +499,12 @@ if uploaded_file:
                 
                     HumanMessage(content = f"Analyze this data from '{sheet_name}':\n\n{summary}")
                 ]
-
-                response = llm.invoke(messages) 
-                sheet_reports[sheet_name] = response.content[0]['text']
+                try:
+                    response = llm.invoke(messages) 
+                    sheet_reports[sheet_name] = response.content[0]['text']
+                except Exception as e:
+                    st.error(f"Error occurred while generating report for sheet '{sheet_name}': {e}. Please try again.")
+                    st.stop()
 
             # Combine all sheet reports into one final report
             if len(sheet_reports) == 1:
@@ -523,9 +532,10 @@ if uploaded_file:
         st.markdown("---")
         st.markdown(st.session_state.full_report)
 
-        llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
-        for sheet_name, df in st.session_state.sheets_data_cache.items():
-            charts_generator(df, sheet_name, st.session_state.sheets_data_cache, llm)
+        with st.spinner("Generating charts based on your data..."):
+            llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+            for sheet_name, df in st.session_state.sheets_data_cache.items():
+                charts_generator(df, sheet_name, st.session_state.sheets_data_cache, llm)
 
         # Download buttons for both Word and Text formats
         st.markdown("---")
@@ -612,10 +622,14 @@ if uploaded_file:
             # Get the model's response to the follow-up question
             with st.chat_message("Assistant"):
                 with st.spinner("Thinking..."):
-                    llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
-                    response = llm.invoke(messages)
-                    ai_response = response.content[0]['text']
-                    st.markdown(ai_response)
+                    try:
+                        llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+                        response = llm.invoke(messages)
+                        ai_response = response.content[0]['text']
+                        st.markdown(ai_response)
+                    except Exception as e:
+                        ai_response = "Sorry, I encountered an error while generating the response."
+                        st.error(ai_response)
 
             # Save both the user's question and the AI's response to the chat history in session state
             st.session_state.chat_history.append({"role": "user", "content": user_input})
