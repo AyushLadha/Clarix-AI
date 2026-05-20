@@ -347,10 +347,15 @@ def generate_word_report(full_report, sheets_data, llm):
 
 # --------------- Load API key
 load_dotenv()
+# Works both locally (.env) and on Streamlit Cloud (secrets)
 api_key = os.getenv("GEMINI_API_KEY")
+
 if not api_key:
-    st.error("GEMINI_API_KEY not found. Please set it in your environment variables or .env file.")
-    st.stop()
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except:
+        st.error("GEMINI_API_KEY not found. Please set it in your .env file or Streamlit secrets.")
+        st.stop()
 
 # --------------- Page Configuration
 st.set_page_config(page_title = "AI Report Generator", page_icon = "📊", layout = "wide")
