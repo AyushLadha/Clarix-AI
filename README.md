@@ -1,6 +1,6 @@
 # 📊 AI Report Generator
 
-An AI-powered data insights tool that analyzes any CSV or Excel file and generates a professional business report instantly — with auto-generated charts, downloadable
+An AI-powered data insights tool that analyzes any CSV or Excel file and generates a professional business report instantly - with auto-generated charts, downloadable
 in multiple formats, and an interactive follow-up chat.
 
 ## 🌐 Live Demo
@@ -22,19 +22,19 @@ in multiple formats, and an interactive follow-up chat.
 - Download the report as:
   - 📄 Plain text (.txt)
   - 📝 Word document (.docx) with charts embedded
-- 💬 Interactive follow-up chat — ask questions about your report
-  - Smart context management — remembers recent conversation
+- 💬 Interactive follow-up chat - ask questions about your report
+  - Smart context management - remembers recent conversation
   - Answers fresh for new topics, references history for follow-ups
   - Resets automatically when a new file is uploaded
 
 ## 🛠️ Tech Stack
-- **Python** — core language
-- **Streamlit** — web interface
-- **LangChain** — LLM orchestration
-- **Google Gemini 1.5 Flash** — AI model (free tier)
-- **Pandas** — data processing and summarization
-- **Matplotlib** — automatic chart generation
-- **Python-docx** — Word document generation with embedded charts
+- **Python** - core language
+- **Streamlit** - web interface
+- **LangChain** - LLM orchestration
+- **Google Gemini 1.5 Flash** - AI model (free tier)
+- **Pandas** - data processing and summarization
+- **Matplotlib** - automatic chart generation
+- **Python-docx** - Word document generation with embedded charts
 
 ## 🚀 How to run locally
 
@@ -53,7 +53,7 @@ pip install -r requirements.txt
 ### 4. Get a free Gemini API key
 - Go to https://aistudio.google.com
 - Click Get API Key → Create API key
-- No credit card required — 1,500 free requests/day
+- No credit card required - 1,500 free requests/day
 
 ### 5. Add your API key
 Create a .env file in the project folder:
@@ -90,7 +90,7 @@ Open http://localhost:8501 in your browser
 - Streamlit session state for persistent data across reruns
 
 ## 📈 Sample output
-Tested on a 56,000 row enterprise sales dataset — Gemini identified:
+Tested on a 56,000 row enterprise sales dataset - Gemini identified:
 - $24.91M total revenue with 41.97% profit margin
 - Cross-selling opportunity (avg order qty of only 1.5 units)
 - North America driving 48% of order volume
@@ -98,5 +98,4 @@ Tested on a 56,000 row enterprise sales dataset — Gemini identified:
 - Actionable recommendations for regional expansion
 
 ## 🔮 Next improvements
-- [ ] Deploy to Streamlit Cloud ← in progress
-- [ ] Chat with your data (Phase 2 — AI Agents)
+- [ ] Chat with your data (Phase 2 - AI Agents)

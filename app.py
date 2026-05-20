@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 
-# --------------- Helper function to clean dataframe columns
+# --------------- Helper function to clean dataframe columns ---------------
 def clean_dataframe(df):
     """Fix mixed type columns that cause Arrow/PyArrow errors in Streamlit"""
     for col in df.columns:
@@ -17,7 +17,7 @@ def clean_dataframe(df):
             df[col] = df[col].astype(str)
     return df
 
-# --------------- Function to summarize the data
+# --------------- Function to summarize the data ---------------
 def summarize_dataframe(df):
     lines = []
     # Basic shape, column names and numeric stats, categorical columns and missing values
@@ -68,6 +68,7 @@ def summarize_dataframe(df):
                 
     return "\n".join(lines)
 
+# --------------- Function for generating charts using Gemini ---------------
 def get_chart_columns(df, llm):
     # We will use the LLM to help us identify which columns might be most interesting to generate charts for, based on the data summary and the column names. 
     # This way, we can leverage the model's understanding of the data and its ability to identify patterns and trends to guide our chart generation, 
@@ -125,7 +126,7 @@ def get_chart_columns(df, llm):
         st.warning("AI could not select chart columns — using fallback method.")
         return None
 
-# --------------- Function to generate charts for a given dataframe and display in Streamlit
+# --------------- Function to generate charts for a given dataframe and display in Streamlit ---------------
 def charts_generator(df, sheet_name, sheets_data, llm):
     matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
                 
@@ -220,7 +221,7 @@ def charts_generator(df, sheet_name, sheets_data, llm):
     if charts_created == 0:
         st.info("No suitable charts could be generated for this dataset. Try uploading a different file or adjusting the data.")
 
-# --------------- Function to generate Word report with charts
+# --------------- Function to generate Word report with charts ---------------
 def generate_word_report(full_report, sheets_data, llm):
     from docx import Document
     from docx.shared import Inches
@@ -345,7 +346,7 @@ def generate_word_report(full_report, sheets_data, llm):
     doc_buf.seek(0)
     return doc_buf
 
-# --------------- Load API key
+# --------------- Load API key ---------------
 load_dotenv()
 # Works both locally (.env) and on Streamlit Cloud (secrets)
 api_key = os.getenv("GEMINI_API_KEY")
@@ -357,12 +358,12 @@ if not api_key:
         st.error("GEMINI_API_KEY not found. Please set it in your .env file or Streamlit secrets.")
         st.stop()
 
-# --------------- Page Configuration
+# --------------- Page Configuration ---------------
 st.set_page_config(page_title = "AI Report Generator", page_icon = "📊", layout = "wide")
 st.title("📊 AI Report Generator")
 st.caption("Generate insights and business recommendations from your dataset using AI")
 
-# --------------- Sidebar
+# --------------- Sidebar ---------------
 with st.sidebar:
     st.header("Settings")
     focus = st.text_area(
@@ -371,8 +372,7 @@ with st.sidebar:
         height = 175
     )
 
-#  --------------- Session State Initialization 
-
+#  --------------- Session State Initialization ---------------
 # Must be initialized before any widget that depends on them
 if "report_generated" not in st.session_state: # We use this to keep track of whether a report has been generated yet, so that we can conditionally show the follow-up question section and charts only after a report is generated.
     st.session_state.report_generated = False
@@ -387,7 +387,7 @@ if "sheets_data_cache" not in st.session_state:
 if "current_file" not in st.session_state:
     st.session_state.current_file = None # We keep track of the name of the currently uploaded file in session state, so that we can detect when the user uploads a new file and reset the session state accordingly. This is important because if the user uploads a new file, we want to make sure that we clear out any previous report, data, and chat history that was related to the old file, to avoid confusion and ensure that the app is always showing information relevant to the currently uploaded file.
 
-# --------------- File upload
+# --------------- File upload ---------------
 uploaded_file = st.file_uploader("Upload your  CSV file or Excel file", type=["csv", "xlsx", "xls"])
 
 # Reset session state if no file is uploaded, to clear out any previous report and data when the user removes the uploaded file or uploads a new file. 
