@@ -3,6 +3,9 @@
 An AI-powered data insights tool that analyzes any CSV or Excel file and generates a professional business report instantly — with auto-generated charts, downloadable
 in multiple formats, and an interactive follow-up chat.
 
+## 🌐 Live Demo
+🔗 [AI Report Generator](https://ai-report-generator-zh3az7tzybjdchxa6atywt.streamlit.app/)
+
 ## 🎯 What it does
 - Upload any CSV or Excel file (.xlsx) via a clean web interface
 - Select specific sheets to analyze (supports multi-sheet Excel files)
