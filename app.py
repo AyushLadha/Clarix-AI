@@ -78,6 +78,28 @@ def get_chart_columns(df, llm):
     numeric_columns = df.select_dtypes(include = 'number').columns.tolist()
     categorical_columns = df.select_dtypes(include = ['object', 'string']).columns.tolist()
 
+    # Try ot convert object colum to numeric if possible
+    for col in categorical_columns:
+        try:
+            converted = pd.to_numeric(df[col], errors='coerce')
+            if converted.notna().sum() > len(df) * 0.5:  # more than 50% convertible
+                df[col] = converted
+                numeric_columns.append(col)
+                categorical_columns.remove(col)
+        except:
+            pass
+
+    # If still no numeric or categorical columns, skip charting
+    if not numeric_columns and not categorical_columns:
+        st.info("No suitable columns found for chart generation.")
+        return None
+
+    # Handle empty numeric columns in describe
+    if numeric_columns:
+        numeric_stats = df[numeric_columns].describe().round(2).to_string()
+    else:
+        numeric_stats = "No numeric columns available"
+
     col_info = f"""
                 Numeric columns: {numeric_columns}
                 Categorical columns: {categorical_columns}
@@ -86,7 +108,7 @@ def get_chart_columns(df, llm):
                 {df.head(10).to_string()}
 
                 Numeric stats:
-                {df[numeric_columns].describe().round(2).to_string()}
+                {df[numeric_columns].describe().round(2).to_string() if numeric_columns else "No numeric columns available"}
                 """
 
     messages = [
@@ -129,6 +151,16 @@ def get_chart_columns(df, llm):
 # --------------- Function to generate charts for a given dataframe and display in Streamlit ---------------
 def charts_generator(df, sheet_name, sheets_data, llm):
     matplotlib.use('Agg')  # Use non-interactive backend for Streamlit
+
+    # Skip charts if no meaningful column names
+    unnamed_cols = [col for col in df.columns 
+                    if str(col).startswith('Unnamed') 
+                    or isinstance(col, int)
+                    or str(col).replace('.','').replace('-','').isdigit()]
+    
+    if len(unnamed_cols) == len(df.columns):
+        st.info("⚠️ Charts skipped — no meaningful column names found in this dataset. Add column headers to your file to enable chart generation.")
+        return
                 
     charts_created = 0
 
@@ -258,7 +290,16 @@ def generate_word_report(full_report, sheets_data, llm):
 
     for sheet_name, df in sheets_data.items():
         if len(sheets_data) > 1:
-            doc.add_heading(f'Charts - {sheet_name}', level=2)
+            doc.add_heading(f'Charts - {sheet_name}', level =  2)
+
+        # Skip charts if no meaningful column names
+        unnamed_cols = [col for col in df.columns
+                    if str(col).startswith('Unnamed')
+                    or isinstance(col, int)
+                    or str(col).replace('.','').replace('-','').isdigit()]
+        if len(unnamed_cols) == len(df.columns):
+            doc.add_paragraph("Charts skipped — no meaningful column names found in this dataset.")
+            continue
 
         chart_cols = get_chart_columns(df, llm)
         if chart_cols:
@@ -266,7 +307,7 @@ def generate_word_report(full_report, sheets_data, llm):
             bar_cols = chart_cols.get('bar_chart_col')
             scatter_x = chart_cols.get('scatter_x')
             scatter_y = chart_cols.get('scatter_y')
-              # We can pass None for the LLM here since we are just reusing the columns identified during the initial report generation. Alternatively, we could choose to call the LLM again to get fresh column recommendations for the Word report, but for simplicity we will just reuse the same columns that were identified during the initial report generation.
+            # We can pass None for the LLM here since we are just reusing the columns identified during the initial report generation. Alternatively, we could choose to call the LLM again to get fresh column recommendations for the Word report, but for simplicity we will just reuse the same columns that were identified during the initial report generation.
             # Chart 1: Numeric distributions
             if hist_cols:
                 cols_to_plot = hist_cols[:4]
