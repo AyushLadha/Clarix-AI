@@ -48,7 +48,7 @@ summary = summarize_dataframe(df)
 print("\n--- Data summary set to Gemini ---")
 print(summary[:500], "...\n")    # for preview of first 500 characters
 
-llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+llm = ChatGoogleGenerativeAI(model = "gemini-3.5-flash", google_api_key = api_key)
 
 # ----- Create the prompt
 messages = [

@@ -10,7 +10,7 @@ load_dotenv()
 api_key = os.getenv("Gemini_API_Key")
 
 # create AI model object
-llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", google_api_key = api_key)
+llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", google_api_key = api_key)
 
 # Send message and get response
 message = [

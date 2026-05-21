@@ -168,7 +168,7 @@ def charts_generator(df, sheet_name, sheets_data, llm):
         bar_columns = chart_cols.get('bar_chart_col')
         if bar_columns and bar_columns in df.columns:
             st.markdown(f"**Distribution of Categorical Column: {bar_columns}**")
-            fig, ax = plt.subplots(figsize = (6, 4))
+            fig, ax = plt.subplots(figsize = (5, 3))
             top_values = df[bar_columns].value_counts().head(10)
             top_values.plot(kind = 'bar', ax = ax, color = 'salmon', edgecolor = 'black')
             ax.set_title(f"Top Values in '{bar_columns}'", fontsize = 10)
@@ -189,7 +189,7 @@ def charts_generator(df, sheet_name, sheets_data, llm):
 
             if len(scatter_df) > 0:  # Only plot if there are valid rows to plot
                 st.markdown(f"**{scatter_x} vs {scatter_y}**")
-                fig, ax = plt.subplots(figsize = (6, 4))
+                fig, ax = plt.subplots(figsize = (5, 3))
                 ax.scatter(scatter_df[scatter_x], scatter_df[scatter_y], alpha = 0.5, color = 'lightgreen', s = 20, edgecolor = 'black')
                 ax.set_xlabel(scatter_x, fontsize = 8)
                 ax.set_ylabel(scatter_y, fontsize = 8)
@@ -206,7 +206,7 @@ def charts_generator(df, sheet_name, sheets_data, llm):
 
         if not nulls.empty:
             st.markdown("**Missing Values Bar Chart**")
-            fig, ax = plt.subplots(figsize = (6, 4))
+            fig, ax = plt.subplots(figsize = (5, 2.5))
             nulls.plot(kind = 'bar', ax = ax, color = 'lightcoral', edgecolor = 'black')
             ax.set_title("Missing Values by Column", fontsize = 10)
             ax.set_xlabel("Columns", fontsize = 8)
@@ -363,14 +363,54 @@ st.set_page_config(page_title = "AI Report Generator", page_icon = "📊", layou
 st.title("📊 AI Report Generator")
 st.caption("Generate insights and business recommendations from your dataset using AI")
 
+# --------------- Instructions ---------------
+st.markdown("""
+**How it works:**
+1. Upload any CSV or Excel file
+2. AI analyzes your data and generates a structured report
+3. Auto-generated charts highlight key trends
+4. Ask follow-up questions about your data
+5. Download the report as a Word document or text file
+""")
+
 # --------------- Sidebar ---------------
 with st.sidebar:
     st.header("Settings")
-    focus = st.text_area(
+
+    # ✅ Replace free text with a dropdown of focus options
+    focus_options = {
+        "General Insights": "Provide a comprehensive summary of key findings, trends, and recommendations.",
+        "Sales & Revenue": "Focus on revenue trends, profit margins, top products, and sales performance.",
+        "Customer Analysis": "Focus on customer segments, demographics, behavior, and retention.",
+        "HR & Workforce": "Focus on employee demographics, attrition, salary distribution, and performance.",
+        "Financial Analysis": "Focus on financial metrics, budget variance, expenses, and forecasting.",
+        "Operations": "Focus on operational efficiency, bottlenecks, and process improvements.",
+    }
+
+    selected_focus = st.selectbox(
         "What should the report focus on?",
-        value = "Provide a summary of the key findings, insights and recommendations from the dataset.",
-        height = 175
+        list(focus_options.keys())
     )
+    focus = focus_options[selected_focus]
+
+    st.divider()
+
+    # ✅ Add model selector
+    st.markdown("**AI Model**")
+    model_choice = st.selectbox(
+        "Select model",
+        ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+        help="Flash Lite is faster, Flash is more powerful"
+    )
+
+    st.divider()
+    st.markdown("**About**")
+    st.markdown("""
+    - 🆓 Powered by Google Gemini (free tier)
+    - 📊 Supports CSV and Excel files
+    - 💬 Ask follow-up questions after report
+    - ⬇️ Download as Word or Text
+    """)
 
 #  --------------- Session State Initialization ---------------
 # Must be initialized before any widget that depends on them
@@ -421,14 +461,37 @@ if uploaded_file:
     file_name = uploaded_file.name
     if file_name.endswith(".csv"): 
         # CSV has only 1 sheet. Load it directly.
-        sheets_data = {"Sheet 1": clean_dataframe(pd.read_csv(uploaded_file))}
+        df = pd.read_csv(uploaded_file)
+
+        # Check if columns are unnamed (no headers) and fix by using first row as header if needed. 
+        # This is important because if there are no column headers, the model will not be able to understand the data and generate meaningful insights, 
+        # so we want to make sure that we have proper column headers before proceeding with the analysis. We check if all columns are either unnamed or integers, 
+        # which is a common pattern when there are no headers in a CSV file, and if so, we take the first row of the data and set it as the column headers, 
+        # and then drop that first row from the data so that it doesn't interfere with the analysis. 
+        # This way, we can ensure that we have meaningful column names for the model to reference when generating the report.
+
+        if all(str(col).startswith('Unnamed') or isinstance(col, int) for col in df.columns):
+            st.warning("⚠️ No column headers detected. Using first row as headers.")
+            df.columns = df.iloc[0]
+            df = df.drop(index=0).reset_index(drop=True)
+        
+        sheets_data = {"Sheet 1": clean_dataframe(df)}
+
     else:
         x1 = pd.ExcelFile(uploaded_file)
         sheets_names = x1.sheet_names
 
         if len(sheets_names) == 1:
             # Only 1 sheet, load it directly
-            sheets_data = {sheets_names[0]: clean_dataframe(x1.parse(sheets_names[0]))}
+            df = x1.parse(sheets_names[0])
+
+            if all(str(col).startswith('Unnamed') or isinstance(col, int) for col in df.columns):
+                st.warning(f"⚠️ Sheet '{sheets_names[0]}' has no column headers. Using first row as headers.")
+                df.columns = df.iloc[0]
+                df = df.drop(index=0).reset_index(drop=True)
+            
+            sheets_data = {sheets_names[0]: clean_dataframe(df)}
+
         else:  
             # for multiple sheets, let user select which one to analyze
             st.info(f"This file contains {len(sheets_names)} sheets.")
@@ -438,10 +501,16 @@ if uploaded_file:
                 st.warning("Please select at least one sheet to proceed.")
                 st.stop()
             
-            # Load the selected sheets into a dictionary
-            sheets_data = {sheet: clean_dataframe(x1.parse(sheet)) for sheet in selected_sheet}
+            sheets_data = {}
+            for sheet in selected_sheet:
+                df = x1.parse(sheet)
+                if all(str(col).startswith('Unnamed') or isinstance(col, int) for col in df.columns):
+                    st.warning(f"⚠️ Sheet '{sheet}' has no column headers. Using first row as headers.")
+                    df.columns = df.iloc[0]
+                    df = df.drop(index=0).reset_index(drop=True)
+                sheets_data[sheet] = clean_dataframe(df)
 
-            for sheet_name, df in selected_sheet.items():
+            for sheet_name, df in sheets_data.items():
                 row_count = df.shape[0]
                 if row_count > 500000:
                     st.warning(f"Sheet '{sheet_name}' contains {row_count:,} rows, which may impact performance.")
@@ -482,7 +551,7 @@ if uploaded_file:
         # --- Generate the report using Gemini
         with st.spinner("Analyzing your data with Gemini... (~15-30 seconds)"):
             # Initialize the llm
-            llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+            llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key = api_key)
             # Generate a report for each sheet and combine them into one final report
             sheet_reports = {}
 
@@ -538,7 +607,7 @@ if uploaded_file:
         st.markdown(st.session_state.full_report)
 
         # --- Generate charts for each sheet and display them
-        llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+        llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key = api_key)
         for sheet_name, df in st.session_state.sheets_data_cache.items():
             charts_generator(df, sheet_name, st.session_state.sheets_data_cache, llm)
 
@@ -628,7 +697,7 @@ if uploaded_file:
             with st.chat_message("Assistant"):
                 with st.spinner("Thinking..."):
                     try:
-                        llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+                        llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key = api_key)
                         response = llm.invoke(messages)
                         ai_response = response.content[0]['text']
                         st.markdown(ai_response)
