@@ -188,20 +188,21 @@ def generate_chart_bytes(df, llm):
         sheet_charts.append(("Distribution of Numeric Columns", buf.getvalue()))
         plt.close()
 
+    # Charts 2, 3, and 4 side by side
+    fig, axes = plt.subplots(1, 3, figsize=(12, 3))
+
     # Chart 2: Bar chart
     bar_col = chart_cols.get('bar_chart_col')
     if bar_col and bar_col in df.columns:
-        fig, ax = plt.subplots(figsize = (5, 3))
-        df[bar_col].value_counts().head(10).plot(kind = 'bar', ax = ax, color = 'salmon', edgecolor = 'black')
-        ax.set_title(f"Top Values in '{bar_col}'", fontsize = 10)
-        ax.set_ylabel("Count", fontsize = 8)
-        ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
-        plt.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
-        buf.seek(0)
-        sheet_charts.append((f"Distribution of {bar_col}", buf.getvalue()))
-        plt.close()
+        df[bar_col].value_counts().head(10).plot(
+            kind = 'bar', ax = axes[0], color = 'salmon', edgecolor = 'black'
+        )
+        axes[0].set_title(f"Top Values in '{bar_col}'", fontsize = 8)
+        axes[0].set_ylabel("Count", fontsize = 7)
+        axes[0].tick_params(axis = 'x', rotation = 45, labelsize = 7)
+    else:
+        axes[0].axis('off')
+        axes[0].set_title("Bar Chart Not Available", fontsize = 8)
 
     # Chart 3: Scatter
     scatter_x = chart_cols.get('scatter_x')
@@ -209,34 +210,38 @@ def generate_chart_bytes(df, llm):
     if scatter_x and scatter_y and scatter_x in df.columns and scatter_y in df.columns:
         scatter_df = df[[scatter_x, scatter_y]].dropna()
         if len(scatter_df) > 0:
-            fig, ax = plt.subplots(figsize = (5, 3))
-            ax.scatter(scatter_df[scatter_x], scatter_df[scatter_y],
-                      alpha = 0.5, color = 'lightgreen', s = 20, edgecolor = 'black')
-            ax.set_xlabel(scatter_x, fontsize = 8)
-            ax.set_ylabel(scatter_y, fontsize = 8)
-            ax.set_title(f"{scatter_x} vs {scatter_y}", fontsize=10)
-            plt.tight_layout()
-            buf = io.BytesIO()
-            fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
-            buf.seek(0)
-            sheet_charts.append((f"{scatter_x} vs {scatter_y}", buf.getvalue()))
-            plt.close()
+            axes[1].scatter(
+                scatter_df[scatter_x], scatter_df[scatter_y],
+                alpha = 0.5, color = 'lightgreen', s = 20, edgecolor = 'black'
+            )
+            axes[1].set_xlabel(scatter_x, fontsize = 7)
+            axes[1].set_ylabel(scatter_y, fontsize = 7)
+            axes[1].set_title(f"{scatter_x} vs {scatter_y}", fontsize = 8)
+        else:
+            axes[1].axis('off')
+            axes[1].set_title("Scatter Plot Not Available", fontsize = 8)
+    else:
+        axes[1].axis('off')
+        axes[1].set_title("Scatter Plot Not Available", fontsize = 8)
 
     # Chart 4: Missing values
     nulls = df.isnull().sum()
     nulls = nulls[nulls > 0]
     if not nulls.empty:
-        fig, ax = plt.subplots(figsize = (5, 2.5))
-        nulls.plot(kind = 'bar', ax = ax, color = 'lightcoral', edgecolor = 'black')
-        ax.set_title("Missing Values by Column", fontsize = 10)
-        ax.set_ylabel("Count", fontsize = 8)
-        ax.tick_params(axis = 'x', rotation = 45, labelsize = 8)
-        plt.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
-        buf.seek(0)
-        sheet_charts.append(("Missing Values", buf.getvalue()))
-        plt.close()
+        nulls.plot(kind = 'bar', ax = axes[2], color = 'lightcoral', edgecolor = 'black')
+        axes[2].set_title("Missing Values by Column", fontsize = 8)
+        axes[2].set_ylabel("Count", fontsize = 7)
+        axes[2].tick_params(axis = 'x', rotation = 45, labelsize = 7)
+    else:
+        axes[2].axis('off')
+        axes[2].set_title("No Missing Values", fontsize = 8)
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+    buf.seek(0)
+    sheet_charts.append(("Summary Charts", buf.getvalue()))
+    plt.close(fig)
 
     return sheet_charts
 

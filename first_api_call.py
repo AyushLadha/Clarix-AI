@@ -10,12 +10,12 @@ load_dotenv()
 api_key = os.getenv("Gemini_API_Key")
 
 # create AI model object
-llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", google_api_key = api_key)
+llm = ChatGoogleGenerativeAI(model = "gemini-3.5-flash", google_api_key = api_key)
 
 # Send message and get response
 message = [
-    SystemMessage(content="You are a helpful data analyts assistant."),
-    HumanMessage(content="In one sentence, what is the most important thing in automating data analysis?")
+    SystemMessage(content = "You are a helpful data analyts assistant."),
+    HumanMessage(content = "In one sentence, what is the most important thing in automating data analysis?")
 ]
 
 response = llm.invoke(message)
