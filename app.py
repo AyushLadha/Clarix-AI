@@ -7,6 +7,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain.agents import create_agent
+from langchain_core.tools import tool
 
 # --------------- Helper function to clean dataframe columns ---------------
 def clean_dataframe(df):
@@ -244,6 +246,64 @@ def generate_chart_bytes(df, llm):
     plt.close(fig)
 
     return sheet_charts
+
+
+# --------------- Data Agent Tools ---------------
+def create_data_agent(df_dict, llm):
+    """Create a data agent with tools to query the uploaded dataframes. 
+    df_dict is a dictionary of {sheet_name: dataframe}"""
+
+    # we need to pass df_dict into the tool scope. We do this by creating tools inside this function so they have access to df_dict via closure
+    @tool
+    def get_dataframe_info() -> str:
+        """Use this tool first to understand the uploaded dataset.
+        Returns sheet names, column names, data types, shape and sample rows for each sheets."""
+        info = []
+        for sheet_name, df in df_dict.items():
+            info.append(f"\n--- Sheet: {sheet_name} ---")
+            info.append(f"Shape: {df.shape[0]:,} rows and {df.shape[1]} columns ")
+            info.append(f"Columns: {df.columns.tolist()}")
+            info.append(f"Data types:\n{df.dtypes.to_string()}")
+            info.append(f"Sample rows:\n{df.head(5).to_string()}")
+        return "\n".join(info)
+    
+    @tool
+    def query_dataframe(pandas_code: str) -> str:
+        """Use this to query the data using pandas code.
+        For single sheet data, the dataframe is available as 'df'.
+        For multiple sheets, use the sheet name like 'sheets["Sheet1"]'.
+        Examples:
+        - df['revenue'].sum()
+        - df.groupby('category_name')['profit'].mean()
+        - df[df['country'] == 'United States']['revenue'].sum()
+        - sheets['Sales']['revenue'].sum()
+        Always write safe read-only pandas code."""
+        try:
+            # make both df (first sheet) and sheets (all sheets) available
+            first_df = list(df_dict.values())[0]
+            result = eval(
+                pandas_code,
+                {"df": first_df, "sheets": df_dict, "pd": pd}
+            )
+            return str(result)
+        except Exception as e:
+            return f"Error: {e}. Try a different pandas expression."
+        
+    @tool
+    def get_column_values(column_name: str) -> str:
+        """Use this tool to see unique values in a specific column.
+        helpful for understanding categorical data before filtering.
+        Example: get_column_values('country') shows all unique countries."""
+        try:
+            first_df = list(df_dict.values())[0]
+            unique_values = first_df[column_name].values_counts().head(20)
+            return f"Top values in '{column_name}':\n{unique_values.to_string()}"
+        except Exception as e:
+            return f"Error: {e}"
+        
+    tools = [get_dataframe_info, query_dataframe, get_column_values]
+    agent = create_agent(model = llm, tools = tools)
+    return agent
 
 # --------------- Function to generate Word report with charts ---------------
 def generate_word_report(full_report, sheets_data, llm):
@@ -628,71 +688,84 @@ if uploaded_file:
             )
 
         # --- Follow-up Questions
+        # --- Data Agent Chat
         st.markdown("---")
-        st.markdown("### Any questions about the report or the data? Ask below!")
-        st.caption("You can ask for clarifications, deeper insights, or even request new charts based on the data.")
-            
+        st.markdown("### Ask anything about your data")
+
         # Display existing chat history
         for message in st.session_state.chat_history:
             if message["role"] == "user":
                 with st.chat_message("user"):
-                    st.markdown(f"**You:** {message['content']}")
+                    st.markdown(message['content'])
             else:
-                with st.chat_message("Assistant"):
-                    st.markdown(f"**Assistant:** {message['content']}")
-        
-        # Input chat message
-        user_input = st.chat_input("Type your question here... ")
+                with st.chat_message("assistant"):
+                    st.markdown(message['content'])
+
+        # Chat input
+        user_input = st.chat_input("Ask anything about your data...")
         if user_input:
-            # Show user's message in the chat
             with st.chat_message("user"):
                 st.markdown(user_input)
 
-            # Build the message history for the LLM, including the system prompt, the original report context, and the user's follow-up question
-            messages = [
-                SystemMessage(content  = """You are a senior data analyst who generated a report.
-
-                            IMPORTANT RULES:
-                            1. Answer each question directly and independently
-                            2. Only reference previous questions if the current question is clearly related to them
-                            3. If the question is about a new topic, answer it fresh without bringing up previous topics
-                            4. Always reference specific numbers from the report when relevant
-                            5. Be concise and clear
-                            6. If you are unsure about something, say so clearly rather than guessing
-                            7. If the user asks for simpler explanation, avoid technical jargon and use real-world analogies
-                            8. If the user asks a question that cannot be answered from the report, say so and explain what data would be needed"""),
-
-                HumanMessage(content = f"""Here is the original report you generated for reference:\n\n{st.session_state.report_context}"""),
-
-                AIMessage(content = """Understood. I have the original report for reference. I have read and understood the report. 
-                          I am ready to answer follow-up questions based on that report. Please provide the follow-up question.""")
-            ]
-            
-            # We then add the recent chat history to the messages that we will pass to the model, so that it has the context of the conversation when answering the follow-up question. 
-            # However, we only pass a limited number of recent messages to avoid overwhelming the model with too much context and to keep the conversation focused on the most relevant information. 
-            # In this case, we will pass the last 8 messages (4 exchanges) as context for the model when answering the follow-up question.
-            recent_history = st.session_state.chat_history[-8:]
-
-            for msg in recent_history:
-                if msg["role"] == "user":
-                    messages.append(HumanMessage(content = msg["content"]))
-                else:
-                    messages.append(AIMessage(content = msg["content"]))
-
-            # New question always last
-            messages.append(HumanMessage(content = user_input))
-
-            # Get the model's response to the follow-up question
-            with st.chat_message("Assistant"):
-                with st.spinner("Thinking..."):
+            with st.chat_message("assistant"):
+                with st.spinner("Agent is analyzing your data..."):
                     try:
-                        response = llm.invoke(messages)
-                        ai_response = response.content[0]['text']
-                        st.markdown(ai_response)
+                        # Create agent with access to raw data
+                        agent = create_data_agent(
+                        st.session_state.sheets_data_cache,
+                        llm
+                        )
+
+                        # Build message history for context
+                        agent_messages = [HumanMessage(content = user_input)]
+
+                        # Add recent chat history for context
+                        recent_history = st.session_state.chat_history[-6:]
+                        history_context = ""
+                        if recent_history:
+                            history_context = "\n\nPrevious conversation:\n"
+                            for msg in recent_history:
+                                role = "User" if msg["role"] == "user" else "Assistant"
+                                history_context += f"{role}: {msg['content']}\n"
+
+                        # Include report context and chat history in the question
+                        full_question = f"""You are a data analyst assistant. 
+                        Here is the report that was generated earlier for context:
+                        {st.session_state.report_context[:2000]}
+
+                        {history_context}
+
+                        Now answer this question by querying the raw data:
+                        {user_input}
+
+                        Always use tools to get exact numbers from the data.
+                        Be concise and specific in your answer."""
+
+                        result = agent.invoke({
+                            "messages": [HumanMessage(content = full_question)]
+                        })
+
+                        # Handle both string and list content formats
+                        last_message = result["messages"][-1]
+                        content = last_message.content
+
+                        if isinstance(content, list):
+                            # Extract text from list format
+                            ai_response = " ".join(
+                                block['text'] for block in content 
+                                if isinstance(block, dict) and block.get('type') == 'text'
+                            )
+                        elif isinstance(content, str):
+                            ai_response = content
+                        else:
+                            ai_response = str(content)
+
                     except Exception as e:
-                        ai_response = "Sorry, I encountered an error while generating the response."
+                        ai_response = f"Sorry, I encountered an error: {str(e)}"
                         st.error(ai_response)
 
-            # Save both the user's question and the AI's response to the chat history in session state
+                st.markdown(ai_response)
+
+            # Save to chat history
             st.session_state.chat_history.append({"role": "user", "content": user_input})
-            st.session_state.chat_history.append({"role": "Assistant", "content": ai_response})
+            st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
