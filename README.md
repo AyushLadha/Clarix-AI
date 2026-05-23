@@ -1,37 +1,40 @@
 # 📊 AI Report Generator
 
-An AI-powered data insights tool that analyzes any CSV or Excel file and generates a professional business report instantly - with auto-generated charts, downloadable
+An AI-powered data insights tool that analyzes any CSV or Excel file and generates
+a professional business report instantly - with AI-selected charts, downloadable
 in multiple formats, and an interactive follow-up chat.
 
 ## 🌐 Live Demo
 🔗 [AI Report Generator](https://ai-report-generator-zh3az7tzybjdchxa6atywt.streamlit.app/)
 
 ## 🎯 What it does
-- Upload any CSV or Excel file (.xlsx) via a clean web interface
+- Upload any CSV or Excel file (.csv, .xlsx) via a clean web interface
 - Select specific sheets to analyze (supports multi-sheet Excel files)
+- Choose a report focus area (Sales, HR, Financial, Operations, etc.)
 - AI analyzes your data and generates a structured report with:
   - Executive Summary
   - Key Findings
   - Data Quality Notes
   - Actionable Recommendations
-- Auto-generates charts from your data:
-  - Numeric column distributions
+- AI selects the most meaningful columns and auto-generates charts:
+  - Key metric distributions (histograms)
   - Top categorical column bar chart
-  - Numeric vs Numeric scatter plot
+  - Metric vs Metric scatter plot
   - Missing values breakdown
+- Charts persist across interactions - no regeneration on sidebar changes
 - Download the report as:
   - 📄 Plain text (.txt)
   - 📝 Word document (.docx) with charts embedded
-- 💬 Interactive follow-up chat - ask questions about your report
-  - Smart context management - remembers recent conversation
-  - Answers fresh for new topics, references history for follow-ups
+- 💬 Interactive follow-up chat with smart context management:
+  - Answers fresh for new topics
+  - References history for related follow-ups
   - Resets automatically when a new file is uploaded
 
 ## 🛠️ Tech Stack
 - **Python** - core language
-- **Streamlit** - web interface
-- **LangChain** - LLM orchestration
-- **Google Gemini 1.5 Flash** - AI model (free tier)
+- **Streamlit** - web interface and session state management
+- **LangChain** - LLM orchestration (prompt chains, message history)
+- **Google Gemini** - AI model (free tier, 1,500 requests/day)
 - **Pandas** - data processing and summarization
 - **Matplotlib** - automatic chart generation
 - **Python-docx** - Word document generation with embedded charts
@@ -64,12 +67,12 @@ streamlit run app.py
 
 Open http://localhost:8501 in your browser
 
-## 🌐 Deploy to Streamlit Cloud (free)
-1. Push your code to GitHub
+## 🌐 Deploy your own (free)
+1. Fork this repo on GitHub
 2. Go to https://share.streamlit.io
-3. Connect your GitHub repo
+3. Connect your forked repo
 4. Add GEMINI_API_KEY in Streamlit Secrets
-5. Deploy — your app is live!
+5. Click Deploy — live in 2 minutes!
 
 ## 📁 Supported File Types
 | Format | Single Sheet | Multi Sheet |
@@ -77,20 +80,29 @@ Open http://localhost:8501 in your browser
 | .csv   | ✅          | ➖ (CSV is always single sheet) |
 | .xlsx  | ✅          | ✅ (select one or more sheets)  |
 
+## 🔒 Edge Cases Handled
+- Mixed data type columns - auto-converted for compatibility
+- No column headers - first row used as headers with warning
+- Large files (100K+ rows) - performance warning shown
+- Unnamed/numeric column names - charts skipped with explanation
+- New file upload - full session reset automatically
+- API errors - friendly error messages with retry option
+
 ## 💡 Key concepts learned
 - Calling LLM APIs with LangChain
 - Prompt engineering with SystemMessage, HumanMessage and AIMessage
 - Smart context management for multi-turn conversations
 - Compressing large datasets into token-efficient summaries
-- Auto-detecting grouping and aggregation columns for any dataset type
+- AI-driven column selection for meaningful chart generation
 - Building interactive web apps with Streamlit
-- Managing API keys securely with .env files
+- Session state management for persistent data across reruns
+- Saving matplotlib charts as bytes for session state storage
+- Managing API keys securely with .env and Streamlit secrets
 - Generating and embedding charts into Word documents
 - Handling mixed data types in pandas DataFrames
-- Streamlit session state for persistent data across reruns
 
 ## 📈 Sample output
-Tested on a 56,000 row enterprise sales dataset - Gemini identified:
+Tested on a 56,000 row enterprise sales dataset — Gemini identified:
 - $24.91M total revenue with 41.97% profit margin
 - Cross-selling opportunity (avg order qty of only 1.5 units)
 - North America driving 48% of order volume
@@ -98,4 +110,5 @@ Tested on a 56,000 row enterprise sales dataset - Gemini identified:
 - Actionable recommendations for regional expansion
 
 ## 🔮 Next improvements
-- [ ] Chat with your data (Phase 2 - AI Agents)
+- [ ] Chat with your data using AI Agents (Phase 2)
+      — query raw data directly instead of just the report summary
