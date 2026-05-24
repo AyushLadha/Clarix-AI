@@ -1,4 +1,6 @@
 import os
+import io
+import json
 import pandas as pd
 from dotenv import load_dotenv
 from pyparsing import col
@@ -156,7 +158,7 @@ def generate_chart_bytes(df, llm):
     Generates charts and returns them as a list of (title, bytes) tuples.
     Used by both Streamlit display and Word document generation.
     """
-    import io
+
     matplotlib.use('Agg')
     sheet_charts = []
 
@@ -300,8 +302,80 @@ def create_data_agent(df_dict, llm):
             return f"Top values in '{column_name}':\n{unique_values.to_string()}"
         except Exception as e:
             return f"Error: {e}"
-        
-    tools = [get_dataframe_info, query_dataframe, get_column_values]
+
+    @tool
+    def generate_chart(chart_request: str) -> str:
+        """Use this tool when the user asks for a chart, graph, plot or visualization.
+        Describe what chart to generate in chart_request.
+        Examples:
+        - 'bar chart of revenue by country'
+        - 'histogram of anual income'
+        - 'scatter plot of revenue vs profit'
+        - 'pie chart of orders by category'
+        Returns a confirmation message when chart is generated."""
+        try:
+            first_df = list(df_dict.values())[0]
+            # ask Gemini to write the matplotlib code for this chart
+            chart_llm = ChatGoogleGenerativeAI(
+                model = "gemini-3.1-flash-lite",
+                google_api_key = api_key
+            )
+            col_info = f"""
+                    Columns: {first_df.columns.tolist()}
+                    Data types: {first_df.dtypes.to_string()}
+                    Sample: {first_df.head(3).to_string()}
+                    """
+            code_messages = [
+                SystemMessage(content="""You are a matplotlib expert.
+                              Write Pythoncode to generate the requested chart using matplotlib.
+                              The dataframe is available as 'df'.
+                              Rules:
+                              - Use matplotlib only (no seaborn, no plotly)
+                              - Always set a clear title, xlabel, ylabel
+                              - Use plt.tight_layout()
+                              - Do not call plt.show()
+                              - Do not save the file
+                              - End with: buf = io.BytesIO(); plt.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight'); buf.seek(0); chart_bytes = buf.getvalue(); plt.close()
+                              Respond with only python code, no explaination, no markdown."""),
+                HumanMessage(content=f"Dataset info:\n{col_info}\n\nGenerate chart: {chart_request}")
+            ]
+            code_response = chart_llm.invoke(code_messages)
+
+            # Extract the code
+            if isinstance(code_response.content, list):
+                chart_code = " ".join(
+                    block['text'] for block in code_response.content
+                    if isinstance(block, dict) and block.get('type') == 'text'
+                )
+            else:
+                chart_code = code_response.content
+
+            # clean code - remove markdown if present
+            chart_code = chart_code.replace('```python', '').replace('```', '').strip()
+
+            # Execute the chart code
+            local_vars = {"df": first_df, "pd": pd, "plt": plt, "io": io, "matplotlib": matplotlib}
+            exec(chart_code, local_vars)
+
+            # Get the chart bytes
+            chart_bytes = local_vars.get('chart_bytes')
+
+            if chart_bytes:
+                # save to session state for streamlit to display
+                if 'agent_charts' not in st.session_state:
+                    st.session_state.agent_charts = []
+                st.session_state.agent_charts.append({
+                    'title': chart_request,
+                    'bytes': chart_bytes
+                })
+                return f"Chart_Generated: {chart_request}"
+            else: 
+                return "Chart generation failed - could not extract chart bytes."
+            
+        except Exception as e:
+            return f"Error generating chart: {str(e)}"
+
+    tools = [get_dataframe_info, query_dataframe, get_column_values, generate_chart]
     agent = create_agent(model = llm, tools = tools)
     return agent
 
@@ -347,7 +421,7 @@ def generate_word_report(full_report, sheets_data, llm):
         sheet_charts = generate_chart_bytes(df, llm)
 
         if not sheet_charts:
-            doc.add_paragraph("Charts skipped — no meaningful column names found.")
+            doc.add_paragraph("Charts skipped - no meaningful column names found.")
         else:
             for title, img_bytes in sheet_charts:
                 buf = io.BytesIO(img_bytes)
@@ -444,6 +518,8 @@ if "charts_generated" not in st.session_state:
     st.session_state.charts_generated = False
 if "chart_images" not in st.session_state:
     st.session_state.chart_images = {}
+if "agent_charts" not in st.session_state:
+    st.session_state.agent_charts = []
 
 # --------------- File upload ---------------
 uploaded_file = st.file_uploader("Upload your  CSV file or Excel file", type=["csv", "xlsx", "xls"])
@@ -461,6 +537,7 @@ if uploaded_file is None:
     st.session_state.current_file = None
     st.session_state.charts_generated = False
     st.session_state.chart_images = {}
+    st.session_state.agent_charts = []
 
 # We also keep track of the name of the currently uploaded file in session state, so that we can detect when the user uploads a new file and reset the session state accordingly. 
 # This is important because if the user uploads a new file, we want to make sure that we clear out any previous report, data, and chat history that was related to the old file, 
@@ -475,9 +552,9 @@ if uploaded_file is not None:
         st.session_state.report_context = ""
         st.session_state.chat_history = []
         st.session_state.sheets_data_cache = {} 
-        if st.session_state.current_file != uploaded_file.name:
-            st.session_state.charts_generated = False
-            st.session_state.chart_images = {}
+        st.session_state.agent_charts = []
+        st.session_state.charts_generated = False
+        st.session_state.chart_images = {}
 
 
 if uploaded_file:
@@ -700,6 +777,8 @@ if uploaded_file:
             else:
                 with st.chat_message("assistant"):
                     st.markdown(message['content'])
+                    if 'chart' in message:
+                        st.image(message['chart'], width = 'stretch')
 
         # Chat input
         user_input = st.chat_input("Ask anything about your data...")
@@ -711,10 +790,7 @@ if uploaded_file:
                 with st.spinner("Agent is analyzing your data..."):
                     try:
                         # Create agent with access to raw data
-                        agent = create_data_agent(
-                        st.session_state.sheets_data_cache,
-                        llm
-                        )
+                        agent = create_data_agent(st.session_state.sheets_data_cache, llm)
 
                         # Build message history for context
                         agent_messages = [HumanMessage(content = user_input)]
@@ -766,6 +842,30 @@ if uploaded_file:
 
                 st.markdown(ai_response)
 
+                # Dispaly any charts genetrated by the agent
+                if 'agent_charts' in st.session_state and st.session_state.agent_charts:
+                    # Show only new charts (ones added during this response)
+                    for chart in st.session_state.agent_charts:
+                        st.markdown(f"**{chart['title']}**")
+                        st.image(chart['bytes'], width = "stretch")
+                    # clear after displaying
+                    st.session_state.agent_charts = []
+
             # Save to chat history
-            st.session_state.chat_history.append({"role": "user", "content": user_input})
-            st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+            if 'agent_charts' in st.session_state and st.session_state.agent_charts:
+                chart_bytes = st.session_state.agent_charts[0]['bytes']
+                for chart in st.session_state.agent_charts:
+                    st.markdown(f"**{chart['title']}**")
+                    st.image(chart['bytes'], width = 'stretch')
+                st.session_state.agent_charts = []
+                # Save with chart attached
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                st.session_state.chat_history.append({"role": "assistant","content": ai_response,"chart": chart_bytes})
+            else:
+                # Save without chart
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+
+            # Force rerun so charts display immediately
+            if "CHART_GENERATED" in ai_response:
+                st.rerun()
