@@ -313,13 +313,13 @@ def create_data_agent(df_dict, llm):
         - 'scatter plot of revenue vs profit'
         - 'pie chart of orders by category'
         Returns a confirmation message when chart is generated."""
+
+        import base64
+
         try:
             first_df = list(df_dict.values())[0]
             # ask Gemini to write the matplotlib code for this chart
-            chart_llm = ChatGoogleGenerativeAI(
-                model = "gemini-3.1-flash-lite",
-                google_api_key = api_key
-            )
+            chart_llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
             col_info = f"""
                     Columns: {first_df.columns.tolist()}
                     Data types: {first_df.dtypes.to_string()}
@@ -327,15 +327,20 @@ def create_data_agent(df_dict, llm):
                     """
             code_messages = [
                 SystemMessage(content="""You are a matplotlib expert.
-                              Write Pythoncode to generate the requested chart using matplotlib.
+                              Write Python code to generate the requested chart using matplotlib.
                               The dataframe is available as 'df'.
                               Rules:
                               - Use matplotlib only (no seaborn, no plotly)
                               - Always set a clear title, xlabel, ylabel
+                              - Always create the figure with: plt.figure(figsize=(7,5))
                               - Use plt.tight_layout()
                               - Do not call plt.show()
                               - Do not save the file
-                              - End with: buf = io.BytesIO(); plt.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight'); buf.seek(0); chart_bytes = buf.getvalue(); plt.close()
+                              - End with: buf = io.BytesIO() 
+                              plt.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
+                              buf.seek(0)
+                              chart_bytes = buf.getvalue() 
+                              plt.close()
                               Respond with only python code, no explaination, no markdown."""),
                 HumanMessage(content=f"Dataset info:\n{col_info}\n\nGenerate chart: {chart_request}")
             ]
@@ -361,14 +366,8 @@ def create_data_agent(df_dict, llm):
             chart_bytes = local_vars.get('chart_bytes')
 
             if chart_bytes:
-                # save to session state for streamlit to display
-                if 'agent_charts' not in st.session_state:
-                    st.session_state.agent_charts = []
-                st.session_state.agent_charts.append({
-                    'title': chart_request,
-                    'bytes': chart_bytes
-                })
-                return f"Chart_Generated: {chart_request}"
+                encoded = base64.b64encode(chart_bytes).decode('utf-8')
+                return f"CHART_GENERATED|{encoded}"
             else: 
                 return "Chart generation failed - could not extract chart bytes."
             
@@ -787,7 +786,7 @@ if uploaded_file:
                 st.markdown(user_input)
 
             with st.chat_message("assistant"):
-                with st.spinner("Agent is analyzing your data..."):
+                with st.spinner("Analyzing your data..."):
                     try:
                         # Create agent with access to raw data
                         agent = create_data_agent(st.session_state.sheets_data_cache, llm)
@@ -815,6 +814,9 @@ if uploaded_file:
                         {user_input}
 
                         Always use tools to get exact numbers from the data.
+                        If the user asks for a chart, call the generate_chart tool.
+                        Do not output JSON tool calls or action/action_input text.
+                        After generating a chart, briefly describe what the chart shows.
                         Be concise and specific in your answer."""
 
                         result = agent.invoke({
@@ -843,29 +845,26 @@ if uploaded_file:
                 st.markdown(ai_response)
 
                 # Dispaly any charts genetrated by the agent
-                if 'agent_charts' in st.session_state and st.session_state.agent_charts:
-                    # Show only new charts (ones added during this response)
-                    for chart in st.session_state.agent_charts:
-                        st.markdown(f"**{chart['title']}**")
-                        st.image(chart['bytes'], width = "stretch")
-                    # clear after displaying
-                    st.session_state.agent_charts = []
+                chart_bytes = None
+                for msg in result["messages"]:
+                    if hasattr(msg, 'content') and isinstance(msg.content, str):
+                        if msg.content.startswith("CHART_GENERATED|"):
+                            import base64
+                            encoded = msg.content.split("|", 1)[1]
+                            chart_bytes = base64.b64decode(encoded)
+                            st.image(chart_bytes, width = 600)
+                            break
 
             # Save to chat history
-            if 'agent_charts' in st.session_state and st.session_state.agent_charts:
-                chart_bytes = st.session_state.agent_charts[0]['bytes']
-                for chart in st.session_state.agent_charts:
-                    st.markdown(f"**{chart['title']}**")
-                    st.image(chart['bytes'], width = 'stretch')
-                st.session_state.agent_charts = []
-                # Save with chart attached
-                st.session_state.chat_history.append({"role": "user", "content": user_input})
-                st.session_state.chat_history.append({"role": "assistant","content": ai_response,"chart": chart_bytes})
+            st.session_state.chat_history.append({"role": "user", "content": user_input})
+            if chart_bytes:
+                st.session_state.chat_history.append({
+                    "role": "assistant",
+                    "content": ai_response,
+                    "chart": chart_bytes
+                })
             else:
-                # Save without chart
-                st.session_state.chat_history.append({"role": "user", "content": user_input})
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
-
-            # Force rerun so charts display immediately
-            if "CHART_GENERATED" in ai_response:
-                st.rerun()
+                st.session_state.chat_history.append({
+                "role": "assistant",
+                "content": ai_response
+                })
