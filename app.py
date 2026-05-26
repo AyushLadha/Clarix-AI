@@ -11,6 +11,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain.agents import create_agent
 from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
+import uuid
 
 # --------------- Helper function to clean dataframe columns ---------------
 def clean_dataframe(df):
@@ -251,15 +253,19 @@ def generate_chart_bytes(df, llm):
 
 
 # --------------- Data Agent Tools ---------------
-def create_data_agent(df_dict, llm):
+def create_data_agent(df_dict, llm, model_choice):
     """Create a data agent with tools to query the uploaded dataframes. 
     df_dict is a dictionary of {sheet_name: dataframe}"""
-
+    
     # we need to pass df_dict into the tool scope. We do this by creating tools inside this function so they have access to df_dict via closure
     @tool
     def get_dataframe_info() -> str:
         """Use this tool first to understand the uploaded dataset.
         Returns sheet names, column names, data types, shape and sample rows for each sheets."""
+
+        # This shows in the Streamlit UI when tool is called
+        print("[AGENT] Calling get_dataframe_info - reading dataset structure")
+
         info = []
         for sheet_name, df in df_dict.items():
             info.append(f"\n--- Sheet: {sheet_name} ---")
@@ -280,6 +286,9 @@ def create_data_agent(df_dict, llm):
         - df[df['country'] == 'United States']['revenue'].sum()
         - sheets['Sales']['revenue'].sum()
         Always write safe read-only pandas code."""
+
+        print(f"⚡ [AGENT] Running query: {pandas_code[:80]}")
+
         try:
             # make both df (first sheet) and sheets (all sheets) available
             first_df = list(df_dict.values())[0]
@@ -296,9 +305,12 @@ def create_data_agent(df_dict, llm):
         """Use this tool to see unique values in a specific column.
         helpful for understanding categorical data before filtering.
         Example: get_column_values('country') shows all unique countries."""
+
+        print(f"[AGENT] Checking values in '{column_name}'")
+
         try:
             first_df = list(df_dict.values())[0]
-            unique_values = first_df[column_name].values_counts().head(20)
+            unique_values = first_df[column_name].value_counts().head(20)
             return f"Top values in '{column_name}':\n{unique_values.to_string()}"
         except Exception as e:
             return f"Error: {e}"
@@ -314,12 +326,14 @@ def create_data_agent(df_dict, llm):
         - 'pie chart of orders by category'
         Returns a confirmation message when chart is generated."""
 
+        print(f"[AGENT] Generating chart: {chart_request}")
+        
         import base64
 
         try:
             first_df = list(df_dict.values())[0]
             # ask Gemini to write the matplotlib code for this chart
-            chart_llm = ChatGoogleGenerativeAI(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+            chart_llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key = api_key)
             col_info = f"""
                     Columns: {first_df.columns.tolist()}
                     Data types: {first_df.dtypes.to_string()}
@@ -375,7 +389,9 @@ def create_data_agent(df_dict, llm):
             return f"Error generating chart: {str(e)}"
 
     tools = [get_dataframe_info, query_dataframe, get_column_values, generate_chart]
-    agent = create_agent(model = llm, tools = tools)
+    # Create memory saver
+    memory = MemorySaver()
+    agent = create_agent(model = llm, tools = tools, checkpointer = memory)
     return agent
 
 # --------------- Function to generate Word report with charts ---------------
@@ -519,6 +535,11 @@ if "chart_images" not in st.session_state:
     st.session_state.chart_images = {}
 if "agent_charts" not in st.session_state:
     st.session_state.agent_charts = []
+if "agent_thread_id" not in st.session_state:
+    st.session_state.agent_thread_id = str(uuid.uuid4())
+if "data_agent" not in st.session_state:
+    st.session_state.data_agent = None
+
 
 # --------------- File upload ---------------
 uploaded_file = st.file_uploader("Upload your  CSV file or Excel file", type=["csv", "xlsx", "xls"])
@@ -537,6 +558,8 @@ if uploaded_file is None:
     st.session_state.charts_generated = False
     st.session_state.chart_images = {}
     st.session_state.agent_charts = []
+    st.session_state.agent_thread_id = str(uuid.uuid4())
+    st.session_state.data_agent = None
 
 # We also keep track of the name of the currently uploaded file in session state, so that we can detect when the user uploads a new file and reset the session state accordingly. 
 # This is important because if the user uploads a new file, we want to make sure that we clear out any previous report, data, and chat history that was related to the old file, 
@@ -554,6 +577,8 @@ if uploaded_file is not None:
         st.session_state.agent_charts = []
         st.session_state.charts_generated = False
         st.session_state.chart_images = {}
+        st.session_state.data_agent = None
+        st.session_state.agent_thread_id = str(uuid.uuid4())
 
 
 if uploaded_file:
@@ -786,10 +811,18 @@ if uploaded_file:
                 st.markdown(user_input)
 
             with st.chat_message("assistant"):
-                with st.spinner("Analyzing your data..."):
+
+                with st.status("Agent is thinking...", expanded = True) as status:
+                    
+                    result = None
+                    ai_response = ""
+                    chart_bytes = None
                     try:
-                        # Create agent with access to raw data
-                        agent = create_data_agent(st.session_state.sheets_data_cache, llm)
+                        # Create agent with access to raw data and  reuse it
+                        if "data_agent" not in st.session_state or st.session_state.data_agent is None:
+                            st.session_state.data_agent = create_data_agent(st.session_state.sheets_data_cache, llm, model_choice)
+                        
+                        agent = st.session_state.data_agent
 
                         # Build message history for context
                         agent_messages = [HumanMessage(content = user_input)]
@@ -819,9 +852,29 @@ if uploaded_file:
                         After generating a chart, briefly describe what the chart shows.
                         Be concise and specific in your answer."""
 
-                        result = agent.invoke({
-                            "messages": [HumanMessage(content = full_question)]
-                        })
+                        result = agent.invoke({"messages": [HumanMessage(content = full_question)]},
+                                              config = {"configurable": {"thread_id": st.session_state.agent_thread_id}})
+                        
+                        st.write("🔍 Agent reasoning:")
+                        for msg in result["messages"]:
+                            msg_type = type(msg).__name__
+                            if msg_type == "AIMessage":
+                                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                                    for tc in msg.tool_calls:
+                                        tool_name = tc['name']
+                                        tool_input = str(tc['args'])[:100]
+                                        if tool_name == "get_dataframe_info":
+                                            st.write(f"Read dataset structure")
+                                        elif tool_name == "query_dataframe":
+                                            st.write(f"Ran query: `{tool_input}`")
+                                        elif tool_name == "get_column_values":
+                                            st.write(f"Checked column values: `{tool_input}`")
+                                        elif tool_name == "generate_chart":
+                                            st.write(f"Generated chart: `{tool_input}`")
+                            elif msg_type == "ToolMessage":
+                                if not msg.content.startswith("CHART_GENERATED"):
+                                    preview = str(msg.content)[:150]
+                                    st.write(f"Result: `{preview}...`")
 
                         # Handle both string and list content formats
                         last_message = result["messages"][-1]
@@ -838,33 +891,31 @@ if uploaded_file:
                         else:
                             ai_response = str(content)
 
+                        if result:
+                            for msg in result["messages"]:
+                                if hasattr(msg, 'content') and isinstance(msg.content, str):
+                                    if msg.content.startswith("CHART_GENERATED|"):
+                                        import base64
+                                        encoded = msg.content.split("|", 1)[1]
+                                        chart_bytes = base64.b64decode(encoded)
+
+                                        break
+                            
+                        status.update(label = "Done!", state = "complete", expanded = True)
                     except Exception as e:
                         ai_response = f"Sorry, I encountered an error: {str(e)}"
+                        status.update(label = "Error", state = "error", expanded = True)
                         st.error(ai_response)
 
                 st.markdown(ai_response)
 
                 # Dispaly any charts genetrated by the agent
-                chart_bytes = None
-                for msg in result["messages"]:
-                    if hasattr(msg, 'content') and isinstance(msg.content, str):
-                        if msg.content.startswith("CHART_GENERATED|"):
-                            import base64
-                            encoded = msg.content.split("|", 1)[1]
-                            chart_bytes = base64.b64decode(encoded)
-                            st.image(chart_bytes, width = 600)
-                            break
+                if chart_bytes:
+                    st.image(chart_bytes, width = 600)
 
             # Save to chat history
             st.session_state.chat_history.append({"role": "user", "content": user_input})
             if chart_bytes:
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": ai_response,
-                    "chart": chart_bytes
-                })
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_response, "chart": chart_bytes})
             else:
-                st.session_state.chat_history.append({
-                "role": "assistant",
-                "content": ai_response
-                })
+                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
