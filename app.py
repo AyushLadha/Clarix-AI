@@ -9,10 +9,39 @@ import matplotlib
 import matplotlib.pyplot as plt
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 import uuid
+
+# --------------- Agent Callback Handler ---------------
+class StreamlitAgentCallback(BaseCallbackHandler):
+    """Show live agent steps in streamlit status container"""
+
+    def __init__(self, status_container):
+        self.status = status_container
+
+    def on_tool_start(self, serialized, input_str, **kwargs):
+        tool_name = serialized.get('name', 'unknown')
+        if tool_name == "get_dataframe_info":
+            self.status.update(label = "📋 Reading dataset structure...")
+        elif tool_name == "query_dataframe":
+            self.status.update(label = "⚡ Running data query...")
+        elif tool_name == "get_column_values":
+            self.status.update(label = "🔎 Checking column values...")
+        elif tool_name == "generate_chart":
+            self.status.update(label = "📈 Generating chart...")
+
+    def on_tool_end(self, output, **kwargs):
+        self.status.update(label = "🔄 Processing results...")
+
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        self.status.update(label = "🤔 Thinking...")
+
+    def on_agent_finish(self, finish, **kwargs):
+        self.status.update(label = "✅ Done!", state = "complete", expanded = False)
+
 
 # --------------- Helper function to clean dataframe columns ---------------
 def clean_dataframe(df):
@@ -817,101 +846,92 @@ if uploaded_file:
                     result = None
                     ai_response = ""
                     chart_bytes = None
-                    try:
-                        # Create agent with access to raw data and  reuse it
-                        if "data_agent" not in st.session_state or st.session_state.data_agent is None:
-                            st.session_state.data_agent = create_data_agent(st.session_state.sheets_data_cache, llm, model_choice)
+
+                    with st.status("🤔 Thinking...", expanded=True) as status:
+                        try:
+                            if st.session_state.data_agent is None:
+                                status.update(label="⚙️ Setting up agent...")
+                                st.session_state.data_agent = create_data_agent(st.session_state.sheets_data_cache, llm, model_choice)
                         
-                        agent = st.session_state.data_agent
+                            agent = st.session_state.data_agent
 
-                        # Build message history for context
-                        agent_messages = [HumanMessage(content = user_input)]
+                            # Build message history for context
+                            agent_messages = [HumanMessage(content = user_input)]
 
-                        # Add recent chat history for context
-                        recent_history = st.session_state.chat_history[-6:]
-                        history_context = ""
-                        if recent_history:
-                            history_context = "\n\nPrevious conversation:\n"
-                            for msg in recent_history:
-                                role = "User" if msg["role"] == "user" else "Assistant"
-                                history_context += f"{role}: {msg['content']}\n"
+                            # Add recent chat history for context
+                            recent_history = st.session_state.chat_history[-6:]
+                            history_context = ""
+                            if recent_history:
+                                history_context = "\n\nPrevious conversation:\n"
+                                for msg in recent_history:
+                                    role = "User" if msg["role"] == "user" else "Assistant"
+                                    history_context += f"{role}: {msg['content']}\n"
 
-                        # Include report context and chat history in the question
-                        full_question = f"""You are a data analyst assistant. 
-                        Here is the report that was generated earlier for context:
-                        {st.session_state.report_context[:2000]}
+                            # Include report context and chat history in the question
+                            full_question = f"""You are a data analyst assistant. 
+                            Here is the report that was generated earlier for context:
+                            {st.session_state.report_context[:2000]}
 
-                        {history_context}
+                            {history_context}
 
-                        Now answer this question by querying the raw data:
-                        {user_input}
+                            Now answer this question by querying the raw data:
+                            {user_input}
 
-                        Always use tools to get exact numbers from the data.
-                        If the user asks for a chart, call the generate_chart tool.
-                        Do not output JSON tool calls or action/action_input text.
-                        After generating a chart, briefly describe what the chart shows.
-                        Be concise and specific in your answer."""
+                            Always use tools to get exact numbers from the data.
+                            If the user asks for a chart, call the generate_chart tool.
+                            Do not output JSON tool calls or action/action_input text.
+                            After generating a chart, briefly describe what the chart shows.
+                            Be concise and specific in your answer."""
 
-                        result = agent.invoke({"messages": [HumanMessage(content = full_question)]},
+                            result = agent.invoke({"messages": [HumanMessage(content = full_question)]},
                                               config = {"configurable": {"thread_id": st.session_state.agent_thread_id}})
                         
-                        st.write("🔍 Agent reasoning:")
-                        for msg in result["messages"]:
-                            msg_type = type(msg).__name__
-                            if msg_type == "AIMessage":
-                                if hasattr(msg, 'tool_calls') and msg.tool_calls:
-                                    for tc in msg.tool_calls:
-                                        tool_name = tc['name']
-                                        tool_input = str(tc['args'])[:100]
-                                        if tool_name == "get_dataframe_info":
-                                            st.write(f"Read dataset structure")
-                                        elif tool_name == "query_dataframe":
-                                            st.write(f"Ran query: `{tool_input}`")
-                                        elif tool_name == "get_column_values":
-                                            st.write(f"Checked column values: `{tool_input}`")
-                                        elif tool_name == "generate_chart":
-                                            st.write(f"Generated chart: `{tool_input}`")
-                            elif msg_type == "ToolMessage":
-                                if not msg.content.startswith("CHART_GENERATED"):
-                                    preview = str(msg.content)[:150]
-                                    st.write(f"Result: `{preview}...`")
+                            # Create callback with status container
+                            callback = StreamlitAgentCallback(status)
 
-                        # Handle both string and list content formats
-                        last_message = result["messages"][-1]
-                        content = last_message.content
+                            status.update(label="🤔 Thinking...")
 
-                        if isinstance(content, list):
-                            # Extract text from list format
-                            ai_response = " ".join(
-                                block['text'] for block in content 
-                                if isinstance(block, dict) and block.get('type') == 'text'
-                            )
-                        elif isinstance(content, str):
-                            ai_response = content
-                        else:
-                            ai_response = str(content)
+                            result = agent.invoke({"messages": [HumanMessage(content=full_question)]},
+                            config={
+                                "configurable": {"thread_id": st.session_state.agent_thread_id},
+                                "callbacks": [callback]  # passing callback here
+                            })
 
-                        if result:
-                            for msg in result["messages"]:
-                                if hasattr(msg, 'content') and isinstance(msg.content, str):
-                                    if msg.content.startswith("CHART_GENERATED|"):
-                                        import base64
-                                        encoded = msg.content.split("|", 1)[1]
-                                        chart_bytes = base64.b64decode(encoded)
+                            # Handle both string and list content formats
+                            last_message = result["messages"][-1]
+                            content = last_message.content
 
-                                        break
+                            if isinstance(content, list):
+                                # Extract text from list format
+                                ai_response = " ".join(
+                                    block['text'] for block in content 
+                                    if isinstance(block, dict) and block.get('type') == 'text'
+                                )
+                            elif isinstance(content, str):
+                                ai_response = content
+                            else:
+                                ai_response = str(content)
+
+                            if result:
+                                for msg in result["messages"]:
+                                    if hasattr(msg, 'content') and isinstance(msg.content, str):
+                                        if msg.content.startswith("CHART_GENERATED|"):
+                                            import base64
+                                            encoded = msg.content.split("|", 1)[1]
+                                            chart_bytes = base64.b64decode(encoded)
+                                            break
                             
-                        status.update(label = "Done!", state = "complete", expanded = True)
-                    except Exception as e:
-                        ai_response = f"Sorry, I encountered an error: {str(e)}"
-                        status.update(label = "Error", state = "error", expanded = True)
-                        st.error(ai_response)
+                                status.update(label = "Done!", state = "complete", expanded = True)
+                        except Exception as e:
+                            ai_response = f"Sorry, I encountered an error: {str(e)}"
+                            status.update(label = "Error", state = "error", expanded = True)
+                            st.error(ai_response)
 
-                st.markdown(ai_response)
+                    st.markdown(ai_response)
 
                 # Dispaly any charts genetrated by the agent
-                if chart_bytes:
-                    st.image(chart_bytes, width = 600)
+                    if chart_bytes:
+                        st.image(chart_bytes, width = 600)
 
             # Save to chat history
             st.session_state.chat_history.append({"role": "user", "content": user_input})
