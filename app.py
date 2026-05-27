@@ -23,24 +23,36 @@ class StreamlitAgentCallback(BaseCallbackHandler):
         self.status = status_container
 
     def on_tool_start(self, serialized, input_str, **kwargs):
-        tool_name = serialized.get('name', 'unknown')
-        if tool_name == "get_dataframe_info":
-            self.status.update(label = "📋 Reading dataset structure...")
-        elif tool_name == "query_dataframe":
-            self.status.update(label = "⚡ Running data query...")
-        elif tool_name == "get_column_values":
-            self.status.update(label = "🔎 Checking column values...")
-        elif tool_name == "generate_chart":
-            self.status.update(label = "📈 Generating chart...")
+        try:
+            tool_name = serialized.get('name', 'unknown')
+            if tool_name == "get_dataframe_info":
+                self.status.update(label = "📋 Reading dataset structure...")
+            elif tool_name == "query_dataframe":
+                self.status.update(label = "⚡ Running data query...")
+            elif tool_name == "get_column_values":
+                self.status.update(label = "🔎 Checking column values...")
+            elif tool_name == "generate_chart":
+                self.status.update(label = "📈 Generating chart...")
+        except:
+            pass # silently ignore threading context errors
 
     def on_tool_end(self, output, **kwargs):
-        self.status.update(label = "🔄 Processing results...")
+        try:
+            self.status.update(label = "🔄 Processing results...")
+        except:
+            pass
 
     def on_llm_start(self, serialized, prompts, **kwargs):
-        self.status.update(label = "🤔 Thinking...")
+        try:
+            self.status.update(label="🤔 Thinking...")
+        except:
+            pass
 
     def on_agent_finish(self, finish, **kwargs):
-        self.status.update(label = "✅ Done!", state = "complete", expanded = False)
+        try:
+            self.status.update(label="✅ Done!", state="complete", expanded=False)
+        except:
+            pass
 
 
 # --------------- Helper function to clean dataframe columns ---------------
@@ -836,21 +848,21 @@ if uploaded_file:
         # Chat input
         user_input = st.chat_input("Ask anything about your data...")
         if user_input:
+            chart_bytes = None
             with st.chat_message("user"):
                 st.markdown(user_input)
 
             with st.chat_message("assistant"):
 
-                with st.status("Agent is thinking...", expanded = True) as status:
+                # with st.status("Agent is thinking...", expanded = True) as status:
                     
                     result = None
                     ai_response = ""
-                    chart_bytes = None
 
-                    with st.status("🤔 Thinking...", expanded=True) as status:
+                    with st.status("🤔 Thinking...", expanded = True) as status:
                         try:
                             if st.session_state.data_agent is None:
-                                status.update(label="⚙️ Setting up agent...")
+                                status.update(label = "⚙️ Setting up agent...")
                                 st.session_state.data_agent = create_data_agent(st.session_state.sheets_data_cache, llm, model_choice)
                         
                             agent = st.session_state.data_agent
@@ -872,16 +884,18 @@ if uploaded_file:
                             Here is the report that was generated earlier for context:
                             {st.session_state.report_context[:2000]}
 
+                            Previous conversation:
                             {history_context}
 
                             Now answer this question by querying the raw data:
                             {user_input}
 
-                            Always use tools to get exact numbers from the data.
-                            If the user asks for a chart, call the generate_chart tool.
-                            Do not output JSON tool calls or action/action_input text.
-                            After generating a chart, briefly describe what the chart shows.
-                            Be concise and specific in your answer."""
+                            IMPORTANT RULES:
+                            - Only call generate_chart tool if the user EXPLICITLY asks for a chart, graph, plot or visualization
+                            - If the user just asks a data question, answer with numbers and text only
+                            - Do NOT generate charts automatically
+                            - Use query_dataframe tool to get exact numbers
+                            - Be concise and specific"""
 
                             result = agent.invoke({"messages": [HumanMessage(content = full_question)]},
                                               config = {"configurable": {"thread_id": st.session_state.agent_thread_id}})
@@ -889,7 +903,7 @@ if uploaded_file:
                             # Create callback with status container
                             callback = StreamlitAgentCallback(status)
 
-                            status.update(label="🤔 Thinking...")
+                            status.update(label = "🤔 Thinking...")
 
                             result = agent.invoke({"messages": [HumanMessage(content=full_question)]},
                             config={
@@ -921,7 +935,7 @@ if uploaded_file:
                                             chart_bytes = base64.b64decode(encoded)
                                             break
                             
-                                status.update(label = "Done!", state = "complete", expanded = True)
+                                status.update(label = "Done!", state = "complete", expanded = False)
                         except Exception as e:
                             ai_response = f"Sorry, I encountered an error: {str(e)}"
                             status.update(label = "Error", state = "error", expanded = True)
