@@ -391,6 +391,10 @@ def create_data_agent(df_dict, llm, model_choice):
                               - Use plt.tight_layout()
                               - Do not call plt.show()
                               - Do not save the file
+                              - ALWAYS format large numbers on axes — never use scientific notation
+                              - For money/revenue/profit columns use: ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+                              - For count/quantity columns use: ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:,.0f}'))
+                              - Always rotate x-axis labels 45 degrees if there are more than 3 categories: plt.xticks(rotation = 45, ha = 'right')
                               - End with: buf = io.BytesIO() 
                               plt.savefig(buf, format = 'png', dpi = 150, bbox_inches = 'tight')
                               buf.seek(0)

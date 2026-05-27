@@ -30,6 +30,19 @@ in multiple formats, and an interactive follow-up chat.
   - References history for related follow-ups
   - Resets automatically when a new file is uploaded
 
+## 🤖 Phase 2 — AI Data Agent
+The follow-up chat is powered by a LangGraph ReAct agent that queries your raw data directly:
+
+- **Live data queries** - exact numbers from raw dataframe, not report summaries
+- **On-demand charts** - ask for any chart in plain English, agent generates it
+- **Session memory** - agent remembers context across questions in the same session
+- **4 tools available:**
+  - `get_dataframe_info` - understands dataset structure
+  - `query_dataframe` - runs pandas queries on raw data
+  - `get_column_values` - explores categorical columns
+  - `generate_chart` - creates any visualization on demand
+
+
 ## 🛠️ Tech Stack
 - **Python** - core language
 - **Streamlit** - web interface and session state management
@@ -110,5 +123,4 @@ Tested on a 56,000 row enterprise sales dataset — Gemini identified:
 - Actionable recommendations for regional expansion
 
 ## 🔮 Next improvements
-- [ ] Chat with your data using AI Agents (Phase 2)
-      — query raw data directly instead of just the report summary
+- Multi-agent system
