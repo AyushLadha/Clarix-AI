@@ -349,6 +349,7 @@ def create_data_agent(df_dict, llm, model_choice):
         - 'insights on revenue by country'
         - 'recommendations for improving profit margin'"""
         print(f"💡 [Agent] Generating insights: {topic}")  
+        
         try:
             insight_llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key  = api_key)
             messages = [

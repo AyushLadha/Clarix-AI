@@ -41,6 +41,7 @@ The follow-up chat is powered by a LangGraph ReAct agent that queries your raw d
   - `query_dataframe` - runs pandas queries on raw data
   - `get_column_values` - explores categorical columns
   - `generate_chart` - creates any visualization on demand
+  - `generate_insights` - gives structured business recommendation
 
 ## 🛠️ Tech Stack
 - **Python** - core language
