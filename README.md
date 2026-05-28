@@ -42,7 +42,6 @@ The follow-up chat is powered by a LangGraph ReAct agent that queries your raw d
   - `get_column_values` - explores categorical columns
   - `generate_chart` - creates any visualization on demand
 
-
 ## 🛠️ Tech Stack
 - **Python** - core language
 - **Streamlit** - web interface and session state management
@@ -123,4 +122,4 @@ Tested on a 56,000 row enterprise sales dataset — Gemini identified:
 - Actionable recommendations for regional expansion
 
 ## 🔮 Next improvements
-- Multi-agent system
+Phase 3 (RAG + Vector databases)! 🚀
