@@ -340,6 +340,30 @@ def create_data_agent(df_dict, llm, model_choice):
             return str(result)
         except Exception as e:
             return f"Error: {e}. Try a different pandas expression."
+
+    @tool
+    def generate_insights(topic: str) -> str:
+        """Generate business insights and recoomendations about a specific topic.
+        Use when user asks for analysis, recommendations, or what data means.
+        Examples: 
+        - 'insights on revenue by country'
+        - 'recommendations for improving profit margin'"""
+        print(f"💡 [Agent] Generating insights: {topic}")  
+        try:
+            insight_llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key  = api_key)
+            messages = [
+                SystemMessage(context = """You are senior business analyst.
+                              Give 2-3 specific, actionable insights based on the topic.
+                              Reference actual numbers where possible.
+                              Be concise - max 150 words total."""),
+                HumanMessage(contect = f"Dataset columns: {list(df_dict.values())[0].columns.tolist()}\nTopic: {topic}")
+            ]  
+            response = insight_llm.invoke(messages)
+            if isinstance(response.content, list):
+                return " ".join(b['text'] for b in response.content if isinstance(b, dict) and b.get('type') == 'text')
+            return response.content
+        except Exception as e:
+            return f"Error generating insights: {str(e)[:100]}"
         
     @tool
     def get_column_values(column_name: str) -> str:
@@ -433,7 +457,7 @@ def create_data_agent(df_dict, llm, model_choice):
         except Exception as e:
             return f"Error generating chart: {str(e)}"
 
-    tools = [get_dataframe_info, query_dataframe, get_column_values, generate_chart]
+    tools = [get_dataframe_info, query_dataframe, get_column_values, generate_insights, generate_chart]
     # Create memory saver
     memory = MemorySaver()
     agent = create_agent(model = llm, tools = tools, checkpointer = memory)
