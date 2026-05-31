@@ -34,14 +34,6 @@ def init_models():
 
 embeddings, llm, splitter = init_models()
 
-# ----- Initialize ChromaDB -----
-@st.cache_resource
-def init_chromadb():
-    client = chromadb.PersistentClient(path = "./chroma_db")
-    return client
-
-chroma_client  = init_chromadb()
-
 # ----- Session State -----
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
@@ -52,48 +44,75 @@ if "chat_history" not in st.session_state:
 if "collection_name" not in st.session_state:
     st.session_state.collection_name = f"session_{st.session_state.session_id[:8]}"
 
-# Each session gets its own collection
-collection = chroma_client.get_or_create_collection(name = st.session_state.collection_name)
+# ----- Initialize ChromaDB -----
+@st.cache_resource
+def init_chromadb():
+    client = chromadb.PersistentClient(path = "./chroma_db")
+    return client
+
+chroma_client  = init_chromadb()
+
+# Get or create this session's collection
+collection_name = f"session_{st.session_state.session_id}"
+try:
+    collection = chroma_client.get_collection(collection_name)
+except:
+    collection = chroma_client.create_collection(collection_name)
 
 # ----- Helper: index a document -----
-def index_document(file_path: str, file_name: str):
-    """Load, chunk, embed and store a document."""
+def index_document(uploaded_file) -> tuple:
+    """Load, chunk, embed and store a document. Returns (success, message)."""
+
+    file_name = uploaded_file.name
+
+    # Skip if already indexed
     if file_name in st.session_state.indexed_files:
         return False, "Already indexed"
-    
+
     try:
-        # load
-        if file_path.endswith(".pdf"):
-            loader = PyPDFLoader(file_path)
-        elif file_path.endswith(".docx"):
-            loader = Docx2txtLoader(file_path)
+        # Save uploaded file to temp location
+        suffix = os.path.splitext(file_name)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
+
+        # Load document based on file type
+        if suffix == ".pdf":
+            loader = PyPDFLoader(tmp_path)
+        elif suffix == ".docx":
+            loader = Docx2txtLoader(tmp_path)
+        elif suffix == ".txt":
+            loader = TextLoader(tmp_path)
         else:
-            loader = TextLoader(file_path)
-        
+            os.unlink(tmp_path)
+            return False, f"Unsupported file type: {suffix}"
+
         documents = loader.load()
+        os.unlink(tmp_path)  # clean up temp file
 
-
-        # chunks
+        # Chunk the document
         chunks = splitter.split_documents(documents)
 
-        # embedding and store
+        if not chunks:
+            return False, "No text could be extracted from this document"
+
+        # Embed and store each chunk
         for i, chunk in enumerate(chunks):
             embedding = embeddings.embed_query(chunk.page_content)
-            # Only store simple metadata
             collection.add(
                 ids=[f"{file_name}_{i}"],
                 embeddings=[embedding],
                 documents=[chunk.page_content],
                 metadatas=[{
                     "source": file_name,
-                    "chunk": i,
-                    "total_chunks": len(chunks),
-                    # Only add page if it exists and is a simple type
-                    "page": str(chunk.metadata.get("page", "")) 
+                    "chunk": str(i),
+                    "total_chunks": str(len(chunks)),
+                    "page": str(chunk.metadata.get("page", ""))
                 }]
             )
 
-            st.session_state.indexed_files.append(file_name)
+        # Mark as indexed
+        st.session_state.indexed_files.append(file_name)
         return True, len(chunks)
 
     except Exception as e:
@@ -106,18 +125,17 @@ def query_documents(question: str, top_k: int = 4) -> tuple:
     question_embedding = embeddings.embed_query(question)
 
     # Search
-    results = collection.query(
-        query_embeddings=[question_embedding],
-        n_results=min(top_k, collection.count())
-    )
+    results = collection.query(query_embeddings = [question_embedding], n_results = min(top_k, collection.count()))
 
     if not results['documents'][0]:
         return "No relevant documents found.", []
-
+    
+    # extract cunks and sources
     chunks = results['documents'][0]
     sources = list(set(m['source'] for m in results['metadatas'][0]))
     context = "\n\n---\n\n".join(chunks)
 
+    # Build report
     messages = [
         SystemMessage(content="""You are a helpful assistant that answers questions
 based on provided document excerpts.
@@ -135,6 +153,7 @@ Question: {question}
 Answer based only on the context above:""")
     ]
 
+    # Extract text from response
     response = llm.invoke(messages)
     if isinstance(response.content, list):
         answer = " ".join(b['text'] for b in response.content
@@ -147,67 +166,56 @@ Answer based only on the context above:""")
 # ----- Layout: sidebar for uploads -----
 with st.sidebar:
     st.header("📁 Upload Documents")
-    st.caption("Supports PDF, Word (.docx), and Text files")
+    st.caption("PDF, Word (.docx), and Text files supported")
 
     uploaded_files = st.file_uploader(
-        "Upload your documents",
-        type = ["pdf", "docx", "txt"],
-        accept_multiple_files = True,
-        label_visibility = "collapsed"
+        "Choose files",
+        type=["pdf", "docx", "txt"],
+        accept_multiple_files=True,
+        label_visibility="collapsed"
     )
 
+    # Process newly uploaded files
     if uploaded_files:
-        for uploaded_file in uploaded_files:
-            if uploaded_file.name not in st.session_state.indexed_files:
-                with st.spinner(f"Indexing {uploaded_file.name}..."):
-                    # Save to temp file
-                    suffix = os.path.splitext(uploaded_file.name)[1]
-                    with tempfile.NamedTemporaryFile(
-                        delete=False, suffix=suffix
-                    ) as tmp:
-                        tmp.write(uploaded_file.read())
-                        tmp_path = tmp.name
-
-                    # Index it
-                    success, result = index_document(
-                        tmp_path, uploaded_file.name
-                    )
-                    os.unlink(tmp_path)
-
-                    if success:
-                        st.success(f"✅ {uploaded_file.name} — {result} chunks")
+        for file in uploaded_files:
+            if file.name not in st.session_state.indexed_files:
+                with st.spinner(f"Indexing {file.name}..."):
+                    success, result = index_document(file)
+                if success:
+                    st.success(f"✅ {file.name} — {result} chunks indexed")
+                else:
+                    if result == "Already indexed":
+                        pass  # silently skip
                     else:
-                        st.error(f"❌ {uploaded_file.name}: {result}")
+                        st.error(f"❌ {file.name}: {result}")
 
     st.divider()
 
     # Show indexed documents
     if st.session_state.indexed_files:
-        st.markdown("**Indexed documents:**")
+        st.markdown(f"**{len(st.session_state.indexed_files)} document(s) indexed:**")
         for fname in st.session_state.indexed_files:
             st.markdown(f"📄 {fname}")
 
         st.divider()
 
-        # Top K slider
+        # Settings
         top_k = st.slider(
-            "Chunks to retrieve per question",
+            "Chunks to retrieve",
             min_value=1, max_value=8, value=4,
-            help="More chunks = more context but slower"
+            help="More = more context, but slower"
         )
 
         # Clear button
-        if st.button("🗑️ Clear all documents", width="stretch"):
-            chroma_client.delete_collection(
-                st.session_state.collection_name
-            )
+        if st.button("🗑️ Clear all", width="stretch"):
+            # Delete and recreate collection
+            chroma_client.delete_collection(collection_name)
+            collection = chroma_client.create_collection(collection_name)
             st.session_state.indexed_files = []
             st.session_state.chat_history = []
-            st.session_state.collection_name = f"session_{uuid.uuid4().hex[:8]}"
             st.rerun()
     else:
         top_k = 4
-        st.info("Upload documents to get started")
 
 # ----- Main area: chat interface -----
 if not st.session_state.indexed_files:
@@ -220,7 +228,7 @@ if not st.session_state.indexed_files:
 - Documents are searchable by meaning, not just keywords
 """)
 else:
-    st.markdown(f"**{len(st.session_state.indexed_files)} document(s) ready** — ask anything!")
+    st.markdown(f"**{len(st.session_state.indexed_files)} document(s) ready** - ask anything!")
 
     # Display chat history
     for message in st.session_state.chat_history:
@@ -234,15 +242,15 @@ else:
                     st.caption(f"Sources: {', '.join(message['sources'])}")
 
     # Chat input
-    question = st.chat_input("Ask a question about your documents...")
+    question = st.chat_input("Ask a question about your documents...")  
     if question:
         with st.chat_message("user"):
             st.markdown(question)
 
         with st.chat_message("assistant"):
-            with st.status("Searching documents...", expanded=False) as status:
+            with st.status("Searching documents...", expanded = False) as status:
                 answer, sources = query_documents(question, top_k)
-                status.update(label="✅ Done!", state="complete")
+                status.update(label = "✅ Done!", state = "complete")
 
             st.markdown(answer)
             if sources:
