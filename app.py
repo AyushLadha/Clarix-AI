@@ -34,7 +34,7 @@ if not api_key:
 # --------------- Page Configuration ---------------
 st.set_page_config(
     page_title = "Clarix", 
-    page_icon = "📊", 
+    page_icon = "✦", 
     layout = "wide"
     )
 
@@ -681,12 +681,12 @@ with st.sidebar:
     st.markdown("### 🔀 Mode")
     app_mode = st.radio(
         "Select mode",
-        ["📊 Report Generator", "📄 Document Q&A"],
+        ["📊 Data Analysis", "📄 Document Q&A"],
         label_visibility="collapsed"
     )
     st.divider()
  
-    if app_mode == "📊 Report Generator":
+    if app_mode == "📊 Data Analysis":
         st.header("⚙️ Settings")
         focus_options = {
             "General Insights": "Provide a comprehensive summary of key findings, trends, and recommendations.",
@@ -762,7 +762,7 @@ with st.sidebar:
                 st.markdown(f"📄 {fname}")
             st.divider()
             rag_top_k = st.slider("Chunks to retrieve", 1, 8, 4)
-            if st.button("🗑️ Clear all documents", width="stretch"):
+            if st.button("🗑️ Clear all documents", width = "stretch"):
                 rag_chroma_client.delete_collection(rag_collection_name)
                 st.session_state.rag_indexed_files = []
                 st.session_state.rag_chat_history = []
@@ -774,14 +774,14 @@ with st.sidebar:
 
 
 # --------------- Report Generator Mode ---------------
-if app_mode == "📊 Report Generator":   
-    st.title("📊 AI Report Generator")
+if app_mode == "📊 Data Analysis":   
+    st.title("✦ Clarix - AI Data Analyst")
     st.caption("Generate insights and business recommnedations from your dataset using AI")
     # --------------- Instructions ---------------
     st.markdown("""
     **How it works:**
     1. Upload any CSV or Excel file
-    2. AI analyzes your data and generates a structured report
+    2. Clarix analyzes your data and generates a structured report
     3. Auto-generated charts highlight key trends
     4. Ask follow-up questions about your data
     5. Download the report as a Word document or text file
@@ -1159,7 +1159,7 @@ if app_mode == "📊 Report Generator":
 # --------------- Document Q&A Mode ---------------
 else:
     st.title("📄 Document Q&A")
-    st.caption("Upload documents and ask questions across all of them instantly")
+    st.caption("Search and extract insights from your documents instantly")
  
     if not st.session_state.rag_indexed_files:
         st.info("👈 Upload documents in the sidebar to get started")
