@@ -1,56 +1,63 @@
-# 📊 AI Report Generator
+# ✦ Clarix - AI-Powered Data & Document Intelligence
 
-An AI-powered data insights tool that analyzes any CSV or Excel file and generates
-a professional business report instantly - with AI-selected charts, downloadable
-in multiple formats, and an interactive follow-up chat.
+An end-to-end AI platform that transforms raw data and documents into 
+actionable insights - built with Python, LangChain, LangGraph, and Google Gemini.
 
 ## 🌐 Live Demo
-🔗 [AI Report Generator](https://ai-report-generator-zh3az7tzybjdchxa6atywt.streamlit.app/)
+🔗 [Clarix](https://ai-report-generator-zh3az7tzybjdchxa6atywt.streamlit.app/)
 
-## 🎯 What it does
-- Upload any CSV or Excel file (.csv, .xlsx) via a clean web interface
-- Select specific sheets to analyze (supports multi-sheet Excel files)
-- Choose a report focus area (Sales, HR, Financial, Operations, etc.)
-- AI analyzes your data and generates a structured report with:
-  - Executive Summary
-  - Key Findings
-  - Data Quality Notes
-  - Actionable Recommendations
-- AI selects the most meaningful columns and auto-generates charts:
-  - Key metric distributions (histograms)
-  - Top categorical column bar chart
-  - Metric vs Metric scatter plot
-  - Missing values breakdown
-- Charts persist across interactions - no regeneration on sidebar changes
-- Download the report as:
-  - 📄 Plain text (.txt)
-  - 📝 Word document (.docx) with charts embedded
-- 💬 Interactive follow-up chat with smart context management:
-  - Answers fresh for new topics
-  - References history for related follow-ups
-  - Resets automatically when a new file is uploaded
+---
 
-## 🤖 Phase 2 — AI Data Agent
-The follow-up chat is powered by a LangGraph ReAct agent that queries your raw data directly:
+## ⚡ Data Analysis Mode
 
-- **Live data queries** - exact numbers from raw dataframe, not report summaries
-- **On-demand charts** - ask for any chart in plain English, agent generates it
-- **Session memory** - agent remembers context across questions in the same session
-- **4 tools available:**
-  - `get_dataframe_info` - understands dataset structure
-  - `query_dataframe` - runs pandas queries on raw data
-  - `get_column_values` - explores categorical columns
-  - `generate_chart` - creates any visualization on demand
-  - `generate_insights` - gives structured business recommendation
+Upload any CSV or Excel file and get a structured business report instantly.
+
+**What it does:**
+- Analyzes any dataset - sales, HR, finance, operations
+- Generates a structured report with Executive Summary, Key Findings, 
+  Data Quality Notes, and Recommendations
+- AI selects the most meaningful columns and auto-generates charts
+- Download the full report as Word (.docx) with embedded charts or plain text
+- Ask follow-up questions - a LangGraph AI agent queries your raw data directly
+
+**AI Agent tools:**
+- `get_dataframe_info` - understands dataset structure
+- `query_dataframe` - runs live pandas queries for exact numbers
+- `get_column_values` - explores categorical columns
+- `generate_chart` - creates any visualization on demand
+- `generate_insights` - produces business recommendations
+
+---
+
+## 🔍 Doc Explore Mode
+
+Upload PDFs, Word docs, or text files and ask questions across all of them.
+
+**What it does:**
+- Indexes uploaded documents into a ChromaDB vector database
+- Searches by meaning - not just keywords
+- Answers questions with exact citations from source documents
+- Supports multiple documents simultaneously
+- Each session gets its own isolated collection
+
+---
 
 ## 🛠️ Tech Stack
-- **Python** - core language
-- **Streamlit** - web interface and session state management
-- **LangChain** - LLM orchestration (prompt chains, message history)
-- **Google Gemini** - AI model (free tier, 1,500 requests/day)
-- **Pandas** - data processing and summarization
-- **Matplotlib** - automatic chart generation
-- **Python-docx** - Word document generation with embedded charts
+
+| Layer | Technology |
+|---|---|
+| Frontend | Streamlit |
+| LLM | Google Gemini (gemini-3.1-flash-lite) |
+| Embeddings | Google gemini-embedding-001 |
+| Agent framework | LangChain + LangGraph |
+| Agent memory | LangGraph MemorySaver |
+| Vector database | ChromaDB (in-memory) |
+| Data processing | Pandas, Matplotlib |
+| Document parsing | LangChain community loaders |
+| Export | Python-docx |
+| Deployment | Streamlit Cloud |
+
+---
 
 ## 🚀 How to run locally
 
@@ -58,7 +65,7 @@ The follow-up chat is powered by a LangGraph ReAct agent that queries your raw d
 git clone https://github.com/AyushLadha/ai-report-generator.git
 cd ai-report-generator
 
-### 2. Create a virtual environment
+### 2. Create virtual environment
 python -m venv .venv
 .venv\Scripts\activate  # Windows
 source .venv/bin/activate  # Mac/Linux
@@ -69,29 +76,16 @@ pip install -r requirements.txt
 ### 4. Get a free Gemini API key
 - Go to https://aistudio.google.com
 - Click Get API Key → Create API key
-- No credit card required - 1,500 free requests/day
+- Free tier: 1,500 requests/day, no credit card required
 
 ### 5. Add your API key
-Create a .env file in the project folder:
+Create a .env file:
 GEMINI_API_KEY=your_key_here
 
 ### 6. Run the app
 streamlit run app.py
 
-Open http://localhost:8501 in your browser
-
-## 🌐 Deploy your own (free)
-1. Fork this repo on GitHub
-2. Go to https://share.streamlit.io
-3. Connect your forked repo
-4. Add GEMINI_API_KEY in Streamlit Secrets
-5. Click Deploy — live in 2 minutes!
-
-## 📁 Supported File Types
-| Format | Single Sheet | Multi Sheet |
-|--------|-------------|-------------|
-| .csv   | ✅          | ➖ (CSV is always single sheet) |
-| .xlsx  | ✅          | ✅ (select one or more sheets)  |
+---
 
 ## 🔒 Edge Cases Handled
 - Mixed data type columns - auto-converted for compatibility
@@ -99,28 +93,52 @@ Open http://localhost:8501 in your browser
 - Large files (100K+ rows) - performance warning shown
 - Unnamed/numeric column names - charts skipped with explanation
 - New file upload - full session reset automatically
-- API errors - friendly error messages with retry option
+- PDF rate limits - batch delay between embeddings
+- Complex PDF metadata - simplified before ChromaDB storage
+
+---
+
+## 📈 Sample outputs
+
+**Data Analysis on 56,000 row enterprise sales dataset:**
+- $24.91M total revenue with 41.97% profit margin
+- United States leading with $7.9M revenue
+- Bikes category: 48% profit margin - highest performer
+- Agent answers "top 5 products by profit" with exact figures instantly
+
+**Doc Explore on a 15-page research PDF:**
+- Indexes in under 60 seconds
+- Answers "what models were used?" with exact methodology citations
+- Searches across multiple documents simultaneously
+
+---
 
 ## 💡 Key concepts learned
-- Calling LLM APIs with LangChain
-- Prompt engineering with SystemMessage, HumanMessage and AIMessage
-- Smart context management for multi-turn conversations
-- Compressing large datasets into token-efficient summaries
-- AI-driven column selection for meaningful chart generation
-- Building interactive web apps with Streamlit
-- Session state management for persistent data across reruns
-- Saving matplotlib charts as bytes for session state storage
-- Managing API keys securely with .env and Streamlit secrets
-- Generating and embedding charts into Word documents
-- Handling mixed data types in pandas DataFrames
+- LLM API calls and prompt engineering with LangChain
+- ReAct agent pattern - Reason → Act → Observe → Repeat
+- Building custom agent tools with @tool decorator
+- Session memory with LangGraph MemorySaver
+- RAG pipeline - chunking, embedding, vector search, retrieval
+- ChromaDB vector database for semantic document search
+- Streamlit session state for persistent data across reruns
+- Saving matplotlib charts as bytes for session persistence
+- Secure API key management with .env and Streamlit secrets
+- Multi-mode Streamlit app architecture
 
-## 📈 Sample output
-Tested on a 56,000 row enterprise sales dataset — Gemini identified:
-- $24.91M total revenue with 41.97% profit margin
-- Cross-selling opportunity (avg order qty of only 1.5 units)
-- North America driving 48% of order volume
-- United States leading with 19,811 transactions
-- Actionable recommendations for regional expansion
+---
 
-## 🔮 Next improvements
-Phase 3: (RAG + Vector databases)! 🚀
+## 🔮 What's next
+- [ ] Phase 4: Combined mode - query data + search documents simultaneously
+- [ ] Persistent vector storage across sessions
+- [ ] Support for more file types (CSV to Doc Explore, images)
+
+---
+
+## 📁 Project structure
+clarix/
+├── app.py              # Main application (all 3 phases)
+├── rag_app.py          # Phase 3 standalone test
+├── agent_test.py       # Phase 2 agent test
+├── multi_agent.py      # Phase 2 multi-agent experiment
+├── requirements.txt    # Dependencies
+└── README.md

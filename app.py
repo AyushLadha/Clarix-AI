@@ -539,12 +539,12 @@ def create_data_agent(df_dict, llm, model_choice):
 # --------------- RAG: Initialize ChromaDB (in-memory) ---------------
 @st.cache_resource
 def get_rag_resources():
-    embeddings = GoogleGenerativeAIEmbeddings(model = "gemini-3.1-flash-lite", google_api_key = api_key)
+    embeddings = GoogleGenerativeAIEmbeddings(model = "gemini-embedding-001", google_api_key = api_key)
 
     chroma_client = chromadb.Client()
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size = 500,
+        chunk_size = 1000,
         chunk_overlap = 50,
         separators = ["\n\n", "\n", ".", " "]
     )
@@ -561,7 +561,7 @@ def rag_index_document(uploaded_file, collection, embeddings, splitter):
             tmp.write(uploaded_file.read())
             tmp_path = tmp.name
         
-        if suffix == ".phd":
+        if suffix == ".pdf":
             loader = PyPDFLoader(tmp_path)
         elif suffix == ".docx":
             loader = Docx2txtLoader(tmp_path)
@@ -607,7 +607,7 @@ def rag_query(question, collection, embeddings, llm, top_k = 4):
         question_embedding = embeddings.embed_query(question)
         n_results = min(top_k, collection.count())
         results = collection.query(
-            query_embedding = [question_embedding],
+            query_embeddings = [question_embedding],
             n_results = n_results
         )
         if not results['documents'][0]:
@@ -626,13 +626,13 @@ def rag_query(question, collection, embeddings, llm, top_k = 4):
                           - Be specific with exact figures when available
                           - Use bullet points when listing multiple items"""),
             HumanMessage(content = f"""Document excerpts:
-                         {content}
+                         {context}
 
                          Question: {question}
                         
                          Answer based only on the excerpts above:""")
         ]
-        response = llm.invokes(messages)
+        response = llm.invoke(messages)
         if isinstance(response.content, list):
             answer = " ".join(b['text'] for b in response.content
                             if isinstance(b, dict) and b.get('type') == 'text')
@@ -681,12 +681,12 @@ with st.sidebar:
     st.markdown("### 🔀 Mode")
     app_mode = st.radio(
         "Select mode",
-        ["📊 Data Analysis", "📄 Document Q&A"],
+        ["📈 Data Analysis", "🔍 Doc Explore"],
         label_visibility="collapsed"
     )
     st.divider()
  
-    if app_mode == "📊 Data Analysis":
+    if app_mode == "📈 Data Analysis":
         st.header("⚙️ Settings")
         focus_options = {
             "General Insights": "Provide a comprehensive summary of key findings, trends, and recommendations.",
@@ -710,7 +710,7 @@ with st.sidebar:
         st.markdown("**About**")
         st.markdown("""
         - 🆓 Powered by Google Gemini (free tier)
-        - 📊 Supports CSV and Excel files
+        - 📋 Supports CSV and Excel files
         - 💬 Ask follow-up questions after report
         - ⬇️ Download as Word or Text
         """)
@@ -750,7 +750,7 @@ with st.sidebar:
                             file, rag_collection, rag_embeddings, rag_splitter
                         )
                     if success:
-                        st.success(f"✅ {file.name} — {result} chunks")
+                        st.success(f"✅ {file.name} - {result} chunks")
                     elif result != "Already indexed":
                         st.error(f"❌ {file.name}: {result}")
  
@@ -774,7 +774,7 @@ with st.sidebar:
 
 
 # --------------- Report Generator Mode ---------------
-if app_mode == "📊 Data Analysis":   
+if app_mode == "📈 Data Analysis":   
     st.title("✦ Clarix - AI Data Analyst")
     st.caption("Generate insights and business recommnedations from your dataset using AI")
     # --------------- Instructions ---------------
@@ -1158,7 +1158,7 @@ if app_mode == "📊 Data Analysis":
 
 # --------------- Document Q&A Mode ---------------
 else:
-    st.title("📄 Document Q&A")
+    st.title("📄 Doc Explore")
     st.caption("Search and extract insights from your documents instantly")
  
     if not st.session_state.rag_indexed_files:
@@ -1168,10 +1168,10 @@ else:
 - 📄 Upload multiple PDFs, Word docs, or text files
 - 💬 Ask questions across all documents at once
 - 🔍 Get answers with source citations
-- 🧠 Search by meaning — not just keywords
+- 🧠 Search by meaning - not just keywords
         """)
     else:
-        rag_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", google_api_key=api_key)
+        rag_llm = ChatGoogleGenerativeAI(model = "gemini-2.5-flash-lite", google_api_key = api_key)
  
         st.success(f"**{len(st.session_state.rag_indexed_files)} document(s) ready** - ask anything!")
  
@@ -1193,11 +1193,11 @@ else:
                 st.markdown(rag_question)
  
             with st.chat_message("assistant"):
-                with st.status("🔍 Searching documents...", expanded=False) as status:
+                with st.status("🔍 Searching documents...", expanded = False) as status:
                     answer, sources = rag_query(
                         rag_question, rag_collection, rag_embeddings, rag_llm, rag_top_k
                     )
-                    status.update(label="✅ Done!", state="complete")
+                    status.update(label="✅ Done!", state = "complete")
  
                 st.markdown(answer)
                 if sources:
