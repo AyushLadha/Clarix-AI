@@ -7,13 +7,36 @@ from pyparsing import col
 import streamlit as st
 import matplotlib
 import matplotlib.pyplot as plt
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 import uuid
+import chromadb
+import tempfile
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader 
+
+# --------------- Load API key ---------------
+load_dotenv()
+# Works both locally (.env) and on Streamlit Cloud (secrets)
+api_key = os.getenv("GEMINI_API_KEY")
+
+if not api_key:
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+    except:
+        st.error("GEMINI_API_KEY not found. Please set it in your .env file or Streamlit secrets.")
+        st.stop()
+
+# --------------- Page Configuration ---------------
+st.set_page_config(
+    page_title = "Clarix", 
+    page_icon = "📊", 
+    layout = "wide"
+    )
 
 # --------------- Agent Callback Handler ---------------
 class StreamlitAgentCallback(BaseCallbackHandler):
@@ -53,7 +76,6 @@ class StreamlitAgentCallback(BaseCallbackHandler):
             self.status.update(label="✅ Done!", state="complete", expanded=False)
         except:
             pass
-
 
 # --------------- Helper function to clean dataframe columns ---------------
 def clean_dataframe(df):
@@ -150,14 +172,11 @@ def get_chart_columns(df, llm):
     col_info = f"""
                 Numeric columns: {numeric_columns}
                 Categorical columns: {categorical_columns}
-
                 Sample data:
                 {df.head(10).to_string()}
-
                 Numeric stats:
                 {df[numeric_columns].describe().round(2).to_string() if numeric_columns else "No numeric columns available"}
                 """
-
     messages = [
         SystemMessage(content = """You are a data visualization expert. You are given a summary of a dataset, including the column names, data types, and some sample data.
                       Given a list of columns, you should identify which ones would be most interesting and insightful to generate charts for, based on the data summary and column names.
@@ -292,6 +311,60 @@ def generate_chart_bytes(df, llm):
 
     return sheet_charts
 
+# --------------- Function to generate Word report with charts ---------------
+def generate_word_report(full_report, sheets_data, llm):
+    from docx import Document
+    from docx.shared import Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    import io
+    matplotlib.use('Agg')
+
+    doc = Document()
+
+    # Title and styling 
+    title = doc.add_heading('AI Analysis Report', 0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    # Report content
+    doc.add_heading('Analysis', level = 1)
+    for line in full_report.split('\n'):
+        line = line.strip()
+        if not line:
+            pass # Add a blank line for spacing
+        elif line.startswith('## '):
+            doc.add_heading(line.replace('## ', ''), level = 2)
+        elif line.startswith('# '):
+            doc.add_heading(line.replace('# ', ''), level = 1)
+        elif line.startswith('='*10):
+            doc.add_paragraph('─' * 40)
+        elif line.startswith('* ') or line.startswith('- '):
+            doc.add_paragraph(line[2:], style = 'List Bullet')
+        else:
+            doc.add_paragraph(line)
+
+    # Charts
+    doc.add_page_break()
+    doc.add_heading('Auto-Generated Charts', level=1)
+
+    for sheet_name, df in sheets_data.items():
+        if len(sheets_data) > 1:
+            doc.add_heading(f'Charts - {sheet_name}', level =  2)
+
+        sheet_charts = generate_chart_bytes(df, llm)
+
+        if not sheet_charts:
+            doc.add_paragraph("Charts skipped - no meaningful column names found.")
+        else:
+            for title, img_bytes in sheet_charts:
+                buf = io.BytesIO(img_bytes)
+                doc.add_paragraph(title).runs[0].bold = True
+                doc.add_picture(buf, width = Inches(6))
+
+    # Save the Word document to a BytesIO buffer and return it for download
+    doc_buf = io.BytesIO()
+    doc.save(doc_buf)
+    doc_buf.seek(0)
+    return doc_buf
 
 # --------------- Data Agent Tools ---------------
 def create_data_agent(df_dict, llm, model_choice):
@@ -333,8 +406,7 @@ def create_data_agent(df_dict, llm, model_choice):
         try:
             # make both df (first sheet) and sheets (all sheets) available
             first_df = list(df_dict.values())[0]
-            result = eval(
-                pandas_code,
+            result = eval(pandas_code,
                 {"df": first_df, "sheets": df_dict, "pd": pd}
             )
             return str(result)
@@ -464,127 +536,114 @@ def create_data_agent(df_dict, llm, model_choice):
     agent = create_agent(model = llm, tools = tools, checkpointer = memory)
     return agent
 
-# --------------- Function to generate Word report with charts ---------------
-def generate_word_report(full_report, sheets_data, llm):
-    from docx import Document
-    from docx.shared import Inches
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    import io
-    matplotlib.use('Agg')
+# --------------- RAG: Initialize ChromaDB (in-memory) ---------------
+@st.cache_resource
+def get_rag_resources():
+    embeddings = GoogleGenerativeAIEmbeddings(model = "gemini-3.1-flash-lite", google_api_key = api_key)
 
-    doc = Document()
+    chroma_client = chromadb.Client()
 
-    # Title and styling 
-    title = doc.add_heading('AI Analysis Report', 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size = 500,
+        chunk_overlap = 50,
+        separators = ["\n\n", "\n", ".", " "]
+    )
+    return embeddings, chroma_client, splitter
 
-    # Report content
-    doc.add_heading('Analysis', level = 1)
-    for line in full_report.split('\n'):
-        line = line.strip()
-        if not line:
-            pass # Add a blank line for spacing
-        elif line.startswith('## '):
-            doc.add_heading(line.replace('## ', ''), level = 2)
-        elif line.startswith('# '):
-            doc.add_heading(line.replace('# ', ''), level = 1)
-        elif line.startswith('='*10):
-            doc.add_paragraph('─' * 40)
-        elif line.startswith('* ') or line.startswith('- '):
-            doc.add_paragraph(line[2:], style = 'List Bullet')
-        else:
-            doc.add_paragraph(line)
-
-    # Charts
-    doc.add_page_break()
-    doc.add_heading('Auto-Generated Charts', level=1)
-
-    for sheet_name, df in sheets_data.items():
-        if len(sheets_data) > 1:
-            doc.add_heading(f'Charts - {sheet_name}', level =  2)
-
-        sheet_charts = generate_chart_bytes(df, llm)
-
-        if not sheet_charts:
-            doc.add_paragraph("Charts skipped - no meaningful column names found.")
-        else:
-            for title, img_bytes in sheet_charts:
-                buf = io.BytesIO(img_bytes)
-                doc.add_paragraph(title).runs[0].bold = True
-                doc.add_picture(buf, width = Inches(6))
-
-    # Save the Word document to a BytesIO buffer and return it for download
-    doc_buf = io.BytesIO()
-    doc.save(doc_buf)
-    doc_buf.seek(0)
-    return doc_buf
-
-# --------------- Load API key ---------------
-load_dotenv()
-# Works both locally (.env) and on Streamlit Cloud (secrets)
-api_key = os.getenv("GEMINI_API_KEY")
-
-if not api_key:
+# --------------- RAG: Index a document ---------------
+def rag_index_document(uploaded_file, collection, embeddings, splitter):
+    file_name = uploaded_file.name
+    if file_name in st.session_state.get("rag_indexed_files", []):
+        return False, "Already indexed"
     try:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    except:
-        st.error("GEMINI_API_KEY not found. Please set it in your .env file or Streamlit secrets.")
-        st.stop()
+        suffix = os.path.splitext(file_name)[1]
+        with tempfile.NamedTemporaryFile(delete = False, suffix = suffix) as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
+        
+        if suffix == ".phd":
+            loader = PyPDFLoader(tmp_path)
+        elif suffix == ".docx":
+            loader = Docx2txtLoader(tmp_path)
+        elif suffix == ".txt":
+            loader = TextLoader(tmp_path)
+        else:
+            os.unlink(tmp_path)
+            return False, f"Unsupported filetype: {suffix}"
 
-# --------------- Page Configuration ---------------
-st.set_page_config(page_title = "AI Report Generator", page_icon = "📊", layout = "wide")
-st.title("📊 AI Report Generator")
-st.caption("Generate insights and business recommendations from your dataset using AI")
+        documents = loader.load()
+        os.unlink(tmp_path)
+        chunks = splitter.split_documents(documents)
 
-# --------------- Instructions ---------------
-st.markdown("""
-**How it works:**
-1. Upload any CSV or Excel file
-2. AI analyzes your data and generates a structured report
-3. Auto-generated charts highlight key trends
-4. Ask follow-up questions about your data
-5. Download the report as a Word document or text file
-""")
+        if not chunks:
+            return False, "No text could be extracted"
 
-# --------------- Sidebar ---------------
-with st.sidebar:
-    st.header("Settings")
+        for i, chunk in enumerate(chunks):
+             embedding = embeddings.embed_query(chunk.page_content)
+             collection.add(
+                 ids = [f"{file_name}_{i}"],
+                 embeddings = [embedding],
+                 documents = [chunk.page_content],
+                 metadatas = [{
+                     "source": file_name,
+                     "chunk": str(i),
+                     "total_chunks": str(len(chunks)),
+                     "page": str(chunk.metadata.get("page", ""))
+                 }]
+             )
+        if "rag_indexed_files" not in st.session_state:
+            st.session_state.rag_indexed_files = []
+        st.session_state.rag_indexed_files.append(file_name)
+        return True, len(chunks)
+    
+    except Exception as e:
+        return False, str(e)
 
-    # ✅ Replace free text with a dropdown of focus options
-    focus_options = {
-        "General Insights": "Provide a comprehensive summary of key findings, trends, and recommendations.",
-        "Sales & Revenue": "Focus on revenue trends, profit margins, top products, and sales performance.",
-        "Customer Analysis": "Focus on customer segments, demographics, behavior, and retention.",
-        "HR & Workforce": "Focus on employee demographics, attrition, salary distribution, and performance.",
-        "Financial Analysis": "Focus on financial metrics, budget variance, expenses, and forecasting.",
-        "Operations": "Focus on operational efficiency, bottlenecks, and process improvements.",
-    }
+# --------------- RAG: Query documents ---------------
+def rag_query(question, collection, embeddings, llm, top_k = 4):
+    if collection.count() == 0:
+        return "No documents indexed yet.", []
+    try:
+        question_embedding = embeddings.embed_query(question)
+        n_results = min(top_k, collection.count())
+        results = collection.query(
+            query_embedding = [question_embedding],
+            n_results = n_results
+        )
+        if not results['documents'][0]:
+            return "No relevant content found.", []
+        
+        chunks = results['documents'][0]
+        sources = list(set(m['source'] for m in results['metadatas'][0]))
+        context = "\n\n---\n\n".join(chunks)
 
-    selected_focus = st.selectbox(
-        "What should the report focus on?",
-        list(focus_options.keys())
-    )
-    focus = focus_options[selected_focus]
+        messages = [
+            SystemMessage(content = """You are a helpful assistant that answwers question basede on the provided document excerpts.
+                          RULES:
+                          - Only use information from the provided content.
+                          - If not found say "I could not find this in the uploaded documents."
+                          - Always mention which document the answer came from.
+                          - Be specific with exact figures when available
+                          - Use bullet points when listing multiple items"""),
+            HumanMessage(content = f"""Document excerpts:
+                         {content}
 
-    st.divider()
+                         Question: {question}
+                        
+                         Answer based only on the excerpts above:""")
+        ]
+        response = llm.invokes(messages)
+        if isinstance(response.content, list):
+            answer = " ".join(b['text'] for b in response.content
+                            if isinstance(b, dict) and b.get('type') == 'text')
+        else:
+            answer = response.content
 
-    # ✅ Add model selector
-    st.markdown("**AI Model**")
-    model_choice = st.selectbox(
-        "Select model",
-        ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
-        help="Flash Lite is faster, Flash is more powerful"
-    )
+        return answer, sources
 
-    st.divider()
-    st.markdown("**About**")
-    st.markdown("""
-    - 🆓 Powered by Google Gemini (free tier)
-    - 📊 Supports CSV and Excel files
-    - 💬 Ask follow-up questions after report
-    - ⬇️ Download as Word or Text
-    """)
-
+    except Exception as e:
+        return f"Error: {str(e)}", []
+    
 #  --------------- Session State Initialization ---------------
 # Must be initialized before any widget that depends on them
 if "report_generated" not in st.session_state: # We use this to keep track of whether a report has been generated yet, so that we can conditionally show the follow-up question section and charts only after a report is generated.
@@ -600,291 +659,405 @@ if "sheets_data_cache" not in st.session_state:
 if "current_file" not in st.session_state:
     st.session_state.current_file = None # We keep track of the name of the currently uploaded file in session state, so that we can detect when the user uploads a new file and reset the session state accordingly. This is important because if the user uploads a new file, we want to make sure that we clear out any previous report, data, and chat history that was related to the old file, to avoid confusion and ensure that the app is always showing information relevant to the currently uploaded file.
 if "charts_generated" not in st.session_state: 
-    st.session_state.charts_generated = False
+    st.session_state.charts_generated = False # We use this to keep track of whether charts have been generated for the current report, so that we can conditionally show the charts section only after charts have been generated. This is important because generating charts can take additional time, and we want to provide feedback to the user about the status of chart generation, and only show the charts section once the charts are ready.
 if "chart_images" not in st.session_state:
-    st.session_state.chart_images = {}
+    st.session_state.chart_images = {} # We use chart_images to store the generated chart images in session state, so that we can display them in the Streamlit app and also include them in the Word document download. This allows us to keep the generated charts readily available in session state without needing to regenerate them every time we want to display them or include them in the download, which can improve performance and provide a better user experience.
 if "agent_charts" not in st.session_state:
-    st.session_state.agent_charts = []
+    st.session_state.agent_charts = [] # We use agent_charts to store charts that are generated by the data agent in response to user queries. This allows us to display those charts in the Streamlit app and also include them in the Word document download, providing a richer and more interactive experience for the user when they ask follow-up questions that involve chart generation. By keeping these agent-generated charts in session state, we can easily manage and display them as part of the ongoing conversation with the user.
 if "agent_thread_id" not in st.session_state:
-    st.session_state.agent_thread_id = str(uuid.uuid4())
+    st.session_state.agent_thread_id = str(uuid.uuid4()) # We generate a unique thread ID for the data agent's conversation, so that we can keep the conversation history organized and separate from any other interactions in the app. This is important because the data agent might have its own conversation history that is relevant to the user's queries and interactions with the data, and by keeping it organized under a unique thread ID, we can ensure that we are providing the correct context to the model when answering follow-up questions and generating charts based on user queries.
 if "data_agent" not in st.session_state:
-    st.session_state.data_agent = None
+    st.session_state.data_agent = None # We will store the data agent instance in session state so that we can refer back to it when the user asks follow-up questions that require querying the data or generating charts. This allows us to maintain the state of the data agent and its conversation history across multiple interactions with the user, providing a more seamless and interactive experience when working with the uploaded data and asking questions about it.
+if "rag_indexed_files" not in st.session_state:
+    st.session_state.rag_indexed_files = [] # We use this to keep track of which files have been indexed in the RAG system, so that we can avoid re-indexing the same file multiple times if the user uploads it again. This is important because indexing can take time and resources, and we want to optimize the performance of the app by only indexing new files that haven't been indexed before. By keeping track of indexed files in session state, we can quickly check if a file has already been indexed and skip the indexing process if it has, providing a more efficient experience for the user when working with the RAG functionality.
+if "rag_chat_history" not in st.session_state:
+    st.session_state.rag_chat_history = [] # We use rag_chat_history to keep track of the conversation history for the RAG interactions, so that we can provide that history as context to the model when answering questions based on the indexed documents. This allows the model to have the full context of the RAG conversation and provide more coherent and relevant answers to questions that are based on the uploaded documents, enhancing the usefulness of the RAG functionality in the app.
+if "rag_session_id" not in st.session_state:
+    st.session_state.rag_session_id = str(uuid.uuid4())[:8] # We generate a unique session ID for the RAG interactions, so that we can keep the conversation history organized and separate from any other interactions in the app. This is important because the RAG interactions might have their own conversation history that is relevant to the user's queries about the uploaded documents, and by keeping it organized under a unique session ID, we can ensure that we are providing the correct context to the model when answering questions based on the indexed documents, enhancing the user experience when working with the RAG functionality.
+
+# --------------- Sidebar ---------------
+with st.sidebar:
+    # Mode selector at top
+    st.markdown("### 🔀 Mode")
+    app_mode = st.radio(
+        "Select mode",
+        ["📊 Report Generator", "📄 Document Q&A"],
+        label_visibility="collapsed"
+    )
+    st.divider()
+ 
+    if app_mode == "📊 Report Generator":
+        st.header("⚙️ Settings")
+        focus_options = {
+            "General Insights": "Provide a comprehensive summary of key findings, trends, and recommendations.",
+            "Sales & Revenue": "Focus on revenue trends, profit margins, top products, and sales performance.",
+            "Customer Analysis": "Focus on customer segments, demographics, behavior, and retention.",
+            "HR & Workforce": "Focus on employee demographics, attrition, salary distribution, and performance.",
+            "Financial Analysis": "Focus on financial metrics, budget variance, expenses, and forecasting.",
+            "Operations": "Focus on operational efficiency, bottlenecks, and process improvements.",
+        }
+        selected_focus = st.selectbox("What should the report focus on?", list(focus_options.keys()))
+        focus = focus_options[selected_focus]
+        st.divider()
+        st.markdown("**AI Model**")
+        model_choice = st.selectbox(
+            "Select model",
+            ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+            help = "Flash Lite is faster, Flash is more powerful"
+        )
+        st.caption("ℹ️ Model applies on next report generation")
+        st.divider()
+        st.markdown("**About**")
+        st.markdown("""
+        - 🆓 Powered by Google Gemini (free tier)
+        - 📊 Supports CSV and Excel files
+        - 💬 Ask follow-up questions after report
+        - ⬇️ Download as Word or Text
+        """)
+ 
+    else:
+        # Document Q&A sidebar
+        st.header("📁 Upload Documents")
+        st.caption("PDF, Word (.docx), and Text files supported")
+ 
+        rag_embeddings, rag_chroma_client, rag_splitter = get_rag_resources()
+ 
+        # Also need model_choice for rag llm
+        model_choice = st.selectbox(
+            "Select model",
+            ["gemini-3.1-flash-lite", "gemini-3.5-flash"],
+            help = "Flash Lite is faster, Flash is more powerful"
+        )
+ 
+        rag_collection_name = f"rag_{st.session_state.rag_session_id}"
+        try:
+            rag_collection = rag_chroma_client.get_collection(rag_collection_name)
+        except:
+            rag_collection = rag_chroma_client.create_collection(rag_collection_name)
+ 
+        rag_files = st.file_uploader(
+            "Choose files",
+            type = ["pdf", "docx", "txt"],
+            accept_multiple_files = True,
+            label_visibility = "collapsed"
+        )
+ 
+        if rag_files:
+            for file in rag_files:
+                if file.name not in st.session_state.rag_indexed_files:
+                    with st.spinner(f"Indexing {file.name}..."):
+                        success, result = rag_index_document(
+                            file, rag_collection, rag_embeddings, rag_splitter
+                        )
+                    if success:
+                        st.success(f"✅ {file.name} — {result} chunks")
+                    elif result != "Already indexed":
+                        st.error(f"❌ {file.name}: {result}")
+ 
+        st.divider()
+ 
+        if st.session_state.rag_indexed_files:
+            st.markdown(f"**{len(st.session_state.rag_indexed_files)} document(s) indexed:**")
+            for fname in st.session_state.rag_indexed_files:
+                st.markdown(f"📄 {fname}")
+            st.divider()
+            rag_top_k = st.slider("Chunks to retrieve", 1, 8, 4)
+            if st.button("🗑️ Clear all documents", width="stretch"):
+                rag_chroma_client.delete_collection(rag_collection_name)
+                st.session_state.rag_indexed_files = []
+                st.session_state.rag_chat_history = []
+                st.session_state.rag_session_id = str(uuid.uuid4())[:8]
+                st.rerun()
+        else:
+            rag_top_k = 4
+            st.info("Upload documents to get started")
 
 
-# --------------- File upload ---------------
-uploaded_file = st.file_uploader("Upload your  CSV file or Excel file", type=["csv", "xlsx", "xls"])
+# --------------- Report Generator Mode ---------------
+if app_mode == "📊 Report Generator":   
+    st.title("📊 AI Report Generator")
+    st.caption("Generate insights and business recommnedations from your dataset using AI")
+    # --------------- Instructions ---------------
+    st.markdown("""
+    **How it works:**
+    1. Upload any CSV or Excel file
+    2. AI analyzes your data and generates a structured report
+    3. Auto-generated charts highlight key trends
+    4. Ask follow-up questions about your data
+    5. Download the report as a Word document or text file
+    """)
+
+    # --------------- File upload ---------------
+    uploaded_file = st.file_uploader("Upload your CSV file or Excel file", type=["csv", "xlsx", "xls"])
 
 # Reset session state if no file is uploaded, to clear out any previous report and data when the user removes the uploaded file or uploads a new file. 
 # This ensures that the app is always in a clean state when starting to analyze a new dataset, and prevents any confusion from leftover data or reports from previous uploads. 
 # It also helps to manage memory usage by clearing out old data that is no longer needed when a new file is uploaded.
-if uploaded_file is None:
-    # No file uploaded — reset everything
-    st.session_state.report_generated = False
-    st.session_state.full_report = ""
-    st.session_state.report_context = ""
-    st.session_state.chat_history = []
-    st.session_state.sheets_data_cache = {} 
-    st.session_state.current_file = None
-    st.session_state.charts_generated = False
-    st.session_state.chart_images = {}
-    st.session_state.agent_charts = []
-    st.session_state.agent_thread_id = str(uuid.uuid4())
-    st.session_state.data_agent = None
-
-# We also keep track of the name of the currently uploaded file in session state, so that we can detect when the user uploads a new file and reset the session state accordingly. 
-# This is important because if the user uploads a new file, we want to make sure that we clear out any previous report, data, and chat history that was related to the old file, 
-# to avoid confusion and ensure that the app is always showing information relevant to the currently uploaded file.
-
-if uploaded_file is not None:
-    # If a different file is uploaded, reset everything
-    if st.session_state.current_file != uploaded_file.name:
-        st.session_state.current_file = uploaded_file.name
+    if uploaded_file is None:
+        # No file uploaded — reset everything
         st.session_state.report_generated = False
         st.session_state.full_report = ""
         st.session_state.report_context = ""
         st.session_state.chat_history = []
         st.session_state.sheets_data_cache = {} 
-        st.session_state.agent_charts = []
+        st.session_state.current_file = None
         st.session_state.charts_generated = False
         st.session_state.chart_images = {}
-        st.session_state.data_agent = None
+        st.session_state.agent_charts = []
         st.session_state.agent_thread_id = str(uuid.uuid4())
+        st.session_state.data_agent = None
+
+# We also keep track of the name of the currently uploaded file in session state, so that we can detect when the user uploads a new file and reset the session state accordingly. 
+# This is important because if the user uploads a new file, we want to make sure that we clear out any previous report, data, and chat history that was related to the old file, 
+# to avoid confusion and ensure that the app is always showing information relevant to the currently uploaded file.
+
+    if uploaded_file is not None:
+    # If a different file is uploaded, reset everything
+        if st.session_state.current_file != uploaded_file.name:
+            st.session_state.current_file = uploaded_file.name
+            st.session_state.report_generated = False
+            st.session_state.full_report = ""
+            st.session_state.report_context = ""
+            st.session_state.chat_history = []
+            st.session_state.sheets_data_cache = {} 
+            st.session_state.agent_charts = []
+            st.session_state.charts_generated = False
+            st.session_state.chart_images = {}
+            st.session_state.data_agent = None
+            st.session_state.agent_thread_id = str(uuid.uuid4())
 
 
-if uploaded_file:
-    # ----- Load the file
-    file_name = uploaded_file.name
-    if file_name.endswith(".csv"): 
-        # CSV has only 1 sheet. Load it directly.
-        df = pd.read_csv(uploaded_file)
+    if uploaded_file:
+        # ----- Load the file
+        file_name = uploaded_file.name
+        if file_name.endswith(".csv"): 
+            # CSV has only 1 sheet. Load it directly.
+            df = pd.read_csv(uploaded_file)
 
-        # Check if columns are unnamed (no headers) and fix by using first row as header if needed. 
-        # This is important because if there are no column headers, the model will not be able to understand the data and generate meaningful insights, 
-        # so we want to make sure that we have proper column headers before proceeding with the analysis. We check if all columns are either unnamed or integers, 
-        # which is a common pattern when there are no headers in a CSV file, and if so, we take the first row of the data and set it as the column headers, 
-        # and then drop that first row from the data so that it doesn't interfere with the analysis. 
-        # This way, we can ensure that we have meaningful column names for the model to reference when generating the report.
-
-        if all(str(col).startswith('Unnamed') or isinstance(col, int) for col in df.columns):
-            st.warning("⚠️ No column headers detected. Using first row as headers.")
-            df.columns = df.iloc[0]
-            df = df.drop(index=0).reset_index(drop=True)
-        
-        sheets_data = {"Sheet 1": clean_dataframe(df)}
-
-    else:
-        x1 = pd.ExcelFile(uploaded_file)
-        sheets_names = x1.sheet_names
-
-        if len(sheets_names) == 1:
-            # Only 1 sheet, load it directly
-            df = x1.parse(sheets_names[0])
+            # Check if columns are unnamed (no headers) and fix by using first row as header if needed. 
+            # This is important because if there are no column headers, the model will not be able to understand the data and generate meaningful insights, 
+            # so we want to make sure that we have proper column headers before proceeding with the analysis. We check if all columns are either unnamed or integers, 
+            # which is a common pattern when there are no headers in a CSV file, and if so, we take the first row of the data and set it as the column headers, 
+            # and then drop that first row from the data so that it doesn't interfere with the analysis. 
+            # This way, we can ensure that we have meaningful column names for the model to reference when generating the report.
 
             if all(str(col).startswith('Unnamed') or isinstance(col, int) for col in df.columns):
-                st.warning(f"⚠️ Sheet '{sheets_names[0]}' has no column headers. Using first row as headers.")
+                st.warning("⚠️ No column headers detected. Using first row as headers.")
                 df.columns = df.iloc[0]
                 df = df.drop(index=0).reset_index(drop=True)
             
-            sheets_data = {sheets_names[0]: clean_dataframe(df)}
+            sheets_data = {"Sheet 1": clean_dataframe(df)}
 
-        else:  
-            # for multiple sheets, let user select which one to analyze
-            st.info(f"This file contains {len(sheets_names)} sheets.")
-            selected_sheet = st.multiselect("Select the sheets to analyze:", sheets_names, default = sheets_names[0])
+        else:
+            x1 = pd.ExcelFile(uploaded_file)
+            sheets_names = x1.sheet_names
 
-            if not selected_sheet:
-                st.warning("Please select at least one sheet to proceed.")
-                st.stop()
-            
-            sheets_data = {}
-            for sheet in selected_sheet:
-                df = x1.parse(sheet)
+            if len(sheets_names) == 1:
+                # Only 1 sheet, load it directly
+                df = x1.parse(sheets_names[0])
+
                 if all(str(col).startswith('Unnamed') or isinstance(col, int) for col in df.columns):
-                    st.warning(f"⚠️ Sheet '{sheet}' has no column headers. Using first row as headers.")
+                    st.warning(f"⚠️ Sheet '{sheets_names[0]}' has no column headers. Using first row as headers.")
                     df.columns = df.iloc[0]
                     df = df.drop(index=0).reset_index(drop=True)
-                sheets_data[sheet] = clean_dataframe(df)
-
-            for sheet_name, df in sheets_data.items():
-                row_count = df.shape[0]
-                if row_count > 500000:
-                    st.warning(f"Sheet '{sheet_name}' contains {row_count:,} rows, which may impact performance.")
-                elif row_count > 100000:
-                    st.info(f"Sheet '{sheet_name}' contains {row_count:,} rows. Performance may be slower with larger datasets.")
-
-    # ----- Show quick stats and Preview the data for each sheet
-    for sheet_name, df in sheets_data.items():
-        if len(sheets_data) > 1:
-            st.subheader(f"Sheet: {sheet_name}")
-
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("Rows", f"{df.shape[0]:,}")
-        col2.metric("Columns", f"{df.shape[1]:,}")
-        col3.metric("Numeric Columns", f"{df.select_dtypes(include='number').shape[1]}")
-        col4.metric("Categorical Columns", f"{df.select_dtypes(include=['object', 'string']).shape[1]}")
-        col5.metric("Missing Values", f"{df.isnull().sum().sum():,}")
-
-        with st.expander(f"Preview - {sheet_name}", expanded = True):
-            st.dataframe(df.head(10), width = "stretch")
-
-    st.divider()
-
-    # ----- Generate Button ------
-
-    # When the user clicks the button, we will generate the report using Gemini and display it on the page. 
-    # We will also generate some auto-charts based on the data and include them in the report.
-    # We will use session state to keep track of the generated report and the conversation history for follow-up questions.
-    if st.button("Generate Report", type = "primary", width = "stretch"):
-        # Reset session state for new report generation
-       # Reset for new report
-        st.session_state.report_generated = False 
-        st.session_state.charts_generated = False
-        st.session_state.chat_history = []
-        st.session_state.full_report = ""
-        st.session_state.report_context = ""
-        st.session_state.sheets_data_cache = sheets_data
-
-        # --- Generate the report using Gemini
-        with st.spinner("Analyzing your data with Gemini... (~15-30 seconds)"):
-            # Initialize the llm
-            llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key = api_key)
-            # Generate a report for each sheet and combine them into one final report
-            sheet_reports = {}
-
-            # Loop through each sheet and generate a report for it
-            for sheet_name, df in sheets_data.items():
-                # Summarize the data for the current sheet
-                summary = summarize_dataframe(df) 
-
-                # Create the prompt
-                messages = [
-                    SystemMessage(content = f"""You are a senior data analyst. You are given a summary of a dataset. 
-                                Your task is to analyze the summary and provide insights, trends, and potential business recommendations based on the data.
-                                Return the report with these sections:
-                                ## Executive Summary
-                                ## Key Findings
-                                ## Data Quality Notes
-                                ## Recommendations
-                                Focus on: {focus}"""),
                 
-                    HumanMessage(content = f"Analyze this data from '{sheet_name}':\n\n{summary}")
-                ]
-                try:
-                    response = llm.invoke(messages) 
-                    sheet_reports[sheet_name] = response.content[0]['text']
-                except Exception as e:
-                    st.error(f"Error occurred while generating report for sheet '{sheet_name}': {e}. Please try again.")
+                sheets_data = {sheets_names[0]: clean_dataframe(df)}
+
+            else:  
+                # for multiple sheets, let user select which one to analyze
+                st.info(f"This file contains {len(sheets_names)} sheets.")
+                selected_sheet = st.multiselect("Select the sheets to analyze:", sheets_names, default = sheets_names[0])
+
+                if not selected_sheet:
+                    st.warning("Please select at least one sheet to proceed.")
                     st.stop()
+                
+                sheets_data = {}
+                for sheet in selected_sheet:
+                    df = x1.parse(sheet)
+                    if all(str(col).startswith('Unnamed') or isinstance(col, int) for col in df.columns):
+                        st.warning(f"⚠️ Sheet '{sheet}' has no column headers. Using first row as headers.")
+                        df.columns = df.iloc[0]
+                        df = df.drop(index=0).reset_index(drop=True)
+                    sheets_data[sheet] = clean_dataframe(df)
 
-            # Combine all sheet reports into one final report
-            if len(sheet_reports) == 1:
-                # If only one sheet, no need to add sheet names in the report
-                full_report = list(sheet_reports.values())[0]
-            else:
-                # If multiple sheets, add sheet names as headers in the report
-                full_report = ""
-                for sheet_name, report in sheet_reports.items():
-                    full_report += f"\n\n{'='*50}\n"
-                    full_report += f"\nReport for Sheet: {sheet_name}\n"
-                    full_report += f"\n{'='*50}\n\n"
-                    full_report += report
+                for sheet_name, df in sheets_data.items():
+                    row_count = df.shape[0]
+                    if row_count > 500000:
+                        st.warning(f"Sheet '{sheet_name}' contains {row_count:,} rows, which may impact performance.")
+                    elif row_count > 100000:
+                        st.info(f"Sheet '{sheet_name}' contains {row_count:,} rows. Performance may be slower with larger datasets.")
 
-            # Store the full report and sheets data in session state so that we can refer back to it when answering follow-up questions and generating charts for follow-up questions
-            st.session_state.full_report = full_report
-            st.session_state.report_context = full_report  # We use the full report as the context for follow-up questions, but this can be adjusted based on your needs and experimentation with what provides the best results for follow-up questions. For example, you could choose to include the original data summary or even the raw data as part of the context for follow-up questions if you find that leads to better answers from the model.
-            st.session_state.report_generated = True  # We set this to True so that we can conditionally show the follow-up question section and charts only after a report has been generated. This helps to keep the UI clean and focused, and only show the relevant sections when they are applicable.
-        st.rerun()
-    
-    # ----- Display report
-    if st.session_state.report_generated: # We only show the report and charts if a report has been generated, to keep the UI clean and focused.
+        # ----- Show quick stats and Preview the data for each sheet
+        for sheet_name, df in sheets_data.items():
+            if len(sheets_data) > 1:
+                st.subheader(f"Sheet: {sheet_name}")
 
-        llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key = api_key)
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("Rows", f"{df.shape[0]:,}")
+            col2.metric("Columns", f"{df.shape[1]:,}")
+            col3.metric("Numeric Columns", f"{df.select_dtypes(include='number').shape[1]}")
+            col4.metric("Categorical Columns", f"{df.select_dtypes(include=['object', 'string']).shape[1]}")
+            col5.metric("Missing Values", f"{df.isnull().sum().sum():,}")
 
-        st.success("Report generated successfully!")
-        st.markdown("---")
-        st.markdown(st.session_state.full_report)
+            with st.expander(f"Preview - {sheet_name}", expanded = True):
+                st.dataframe(df.head(10), width = "stretch")
 
-        # --- Only generate charts if not already generated 
-        st.markdown("---")
-        if not st.session_state.charts_generated:
-            chart_images = {}
-            
-            for sheet_name, df in st.session_state.sheets_data_cache.items():
-                sheet_charts = generate_chart_bytes(df, llm)
-                chart_images[sheet_name] = sheet_charts
+        st.divider()
 
-            st.session_state.chart_images = chart_images
-            st.session_state.charts_generated = True
+        # ----- Generate Button ------
+
+        # When the user clicks the button, we will generate the report using Gemini and display it on the page. 
+        # We will also generate some auto-charts based on the data and include them in the report.
+        # We will use session state to keep track of the generated report and the conversation history for follow-up questions.
+        if st.button("Generate Report", type = "primary", width = "stretch"):
+            # Reset session state for new report generation
+        # Reset for new report
+            st.session_state.report_generated = False 
+            st.session_state.charts_generated = False
+            st.session_state.chat_history = []
+            st.session_state.full_report = ""
+            st.session_state.report_context = ""
+            st.session_state.sheets_data_cache = sheets_data
+
+            # --- Generate the report using Gemini
+            with st.spinner("Analyzing your data with Gemini... (~15-30 seconds)"):
+                # Initialize the llm
+                llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key = api_key)
+                # Generate a report for each sheet and combine them into one final report
+                sheet_reports = {}
+
+                # Loop through each sheet and generate a report for it
+                for sheet_name, df in sheets_data.items():
+                    # Summarize the data for the current sheet
+                    summary = summarize_dataframe(df) 
+
+                    # Create the prompt
+                    messages = [
+                        SystemMessage(content = f"""You are a senior data analyst. You are given a summary of a dataset. 
+                                    Your task is to analyze the summary and provide insights, trends, and potential business recommendations based on the data.
+                                    Return the report with these sections:
+                                    ## Executive Summary
+                                    ## Key Findings
+                                    ## Data Quality Notes
+                                    ## Recommendations
+                                    Focus on: {focus}"""),
+                    
+                        HumanMessage(content = f"Analyze this data from '{sheet_name}':\n\n{summary}")
+                    ]
+                    try:
+                        response = llm.invoke(messages) 
+                        sheet_reports[sheet_name] = response.content[0]['text']
+                    except Exception as e:
+                        st.error(f"Error occurred while generating report for sheet '{sheet_name}': {e}. Please try again.")
+                        st.stop()
+
+                # Combine all sheet reports into one final report
+                if len(sheet_reports) == 1:
+                    # If only one sheet, no need to add sheet names in the report
+                    full_report = list(sheet_reports.values())[0]
+                else:
+                    # If multiple sheets, add sheet names as headers in the report
+                    full_report = ""
+                    for sheet_name, report in sheet_reports.items():
+                        full_report += f"\n\n{'='*50}\n"
+                        full_report += f"\nReport for Sheet: {sheet_name}\n"
+                        full_report += f"\n{'='*50}\n\n"
+                        full_report += report
+
+                # Store the full report and sheets data in session state so that we can refer back to it when answering follow-up questions and generating charts for follow-up questions
+                st.session_state.full_report = full_report
+                st.session_state.report_context = full_report  # We use the full report as the context for follow-up questions, but this can be adjusted based on your needs and experimentation with what provides the best results for follow-up questions. For example, you could choose to include the original data summary or even the raw data as part of the context for follow-up questions if you find that leads to better answers from the model.
+                st.session_state.report_generated = True  # We set this to True so that we can conditionally show the follow-up question section and charts only after a report has been generated. This helps to keep the UI clean and focused, and only show the relevant sections when they are applicable.
             st.rerun()
         
-        if st.session_state.charts_generated:
-            for sheet_name, charts in st.session_state.chart_images.items():
-                if len(st.session_state.sheets_data_cache) > 1:
-                    st.subheader(f"Auto Generated Charts — {sheet_name}")
+        # ----- Display report
+        if st.session_state.report_generated: # We only show the report and charts if a report has been generated, to keep the UI clean and focused.
+
+            llm = ChatGoogleGenerativeAI(model = model_choice, google_api_key = api_key)
+
+            st.success("Report generated successfully!")
+            st.markdown("---")
+            st.markdown(st.session_state.full_report)
+
+            # --- Only generate charts if not already generated 
+            st.markdown("---")
+            if not st.session_state.charts_generated:
+                chart_images = {}
+                
+                for sheet_name, df in st.session_state.sheets_data_cache.items():
+                    sheet_charts = generate_chart_bytes(df, llm)
+                    chart_images[sheet_name] = sheet_charts
+
+                st.session_state.chart_images = chart_images
+                st.session_state.charts_generated = True
+                st.rerun()
+            
+            if st.session_state.charts_generated:
+                for sheet_name, charts in st.session_state.chart_images.items():
+                    if len(st.session_state.sheets_data_cache) > 1:
+                        st.subheader(f"Auto Generated Charts — {sheet_name}")
+                    else:
+                        st.subheader("Auto Generated Charts")
+
+                    if not charts:
+                        st.info("⚠️ Charts skipped — no meaningful column names found.")
+                    else:
+                        for title, img_bytes in charts:
+                            st.markdown(f"**{title}**")
+                            st.image(img_bytes, width = "stretch")
+
+            # Download buttons for both Word and Text formats
+            st.markdown("---")
+            st.markdown("### Download Report")
+            base_name = os.path.splitext(uploaded_file.name)[0]
+
+            # Provide both Word and Text download options side by side
+            col1, col2 = st.columns([1, 1])
+            # Text file download
+            with col1:            
+                st.download_button(
+                label = "Download Report as Text File",
+                data = st.session_state.full_report,
+                file_name = f"{base_name}_Report.txt",
+                mime = "text/plain",
+                width = "stretch"
+                )
+            # Word document download
+            with col2:
+                doc_buf = generate_word_report(st.session_state.full_report, st.session_state.sheets_data_cache, llm)
+                st.download_button(
+                label = "Download Report as Word Document",
+                data = doc_buf,
+                file_name = f"{base_name}_Report.docx",
+                mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                width = "stretch"
+                )
+
+            # --- Follow-up Questions
+            # --- Data Agent Chat
+            st.markdown("---")
+            st.markdown("### Ask anything about your data")
+
+            # Display existing chat history
+            for message in st.session_state.chat_history:
+                if message["role"] == "user":
+                    with st.chat_message("user"):
+                        st.markdown(message['content'])
                 else:
-                    st.subheader("Auto Generated Charts")
+                    with st.chat_message("assistant"):
+                        st.markdown(message['content'])
+                        if 'chart' in message:
+                            st.image(message['chart'], width = 'stretch')
 
-                if not charts:
-                    st.info("⚠️ Charts skipped — no meaningful column names found.")
-                else:
-                    for title, img_bytes in charts:
-                        st.markdown(f"**{title}**")
-                        st.image(img_bytes, width = "stretch")
-
-        # Download buttons for both Word and Text formats
-        st.markdown("---")
-        st.markdown("### Download Report")
-        base_name = os.path.splitext(uploaded_file.name)[0]
-
-        # Provide both Word and Text download options side by side
-        col1, col2 = st.columns([1, 1])
-        # Text file download
-        with col1:            
-            st.download_button(
-            label = "Download Report as Text File",
-            data = st.session_state.full_report,
-            file_name = f"{base_name}_Report.txt",
-            mime = "text/plain",
-            width = "stretch"
-            )
-        # Word document download
-        with col2:
-            doc_buf = generate_word_report(st.session_state.full_report, st.session_state.sheets_data_cache, llm)
-            st.download_button(
-            label = "Download Report as Word Document",
-            data = doc_buf,
-            file_name = f"{base_name}_Report.docx",
-            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            width = "stretch"
-            )
-
-        # --- Follow-up Questions
-        # --- Data Agent Chat
-        st.markdown("---")
-        st.markdown("### Ask anything about your data")
-
-        # Display existing chat history
-        for message in st.session_state.chat_history:
-            if message["role"] == "user":
+            # Chat input
+            user_input = st.chat_input("Ask anything about your data...")
+            if user_input:
+                chart_bytes = None
                 with st.chat_message("user"):
-                    st.markdown(message['content'])
-            else:
+                    st.markdown(user_input)
+
                 with st.chat_message("assistant"):
-                    st.markdown(message['content'])
-                    if 'chart' in message:
-                        st.image(message['chart'], width = 'stretch')
-
-        # Chat input
-        user_input = st.chat_input("Ask anything about your data...")
-        if user_input:
-            chart_bytes = None
-            with st.chat_message("user"):
-                st.markdown(user_input)
-
-            with st.chat_message("assistant"):
-
-                # with st.status("Agent is thinking...", expanded = True) as status:
-                    
                     result = None
                     ai_response = ""
 
@@ -927,7 +1100,7 @@ if uploaded_file:
                             - Be concise and specific"""
 
                             result = agent.invoke({"messages": [HumanMessage(content = full_question)]},
-                                              config = {"configurable": {"thread_id": st.session_state.agent_thread_id}})
+                                            config = {"configurable": {"thread_id": st.session_state.agent_thread_id}})
                         
                             # Create callback with status container
                             callback = StreamlitAgentCallback(status)
@@ -972,13 +1145,63 @@ if uploaded_file:
 
                     st.markdown(ai_response)
 
-                # Dispaly any charts genetrated by the agent
+                # Dispaly any charts generated by the agent
                     if chart_bytes:
                         st.image(chart_bytes, width = 600)
 
-            # Save to chat history
-            st.session_state.chat_history.append({"role": "user", "content": user_input})
-            if chart_bytes:
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_response, "chart": chart_bytes})
+                # Save to chat history
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                if chart_bytes:
+                    st.session_state.chat_history.append({"role": "assistant", "content": ai_response, "chart": chart_bytes})
+                else:
+                    st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+
+# --------------- Document Q&A Mode ---------------
+else:
+    st.title("📄 Document Q&A")
+    st.caption("Upload documents and ask questions across all of them instantly")
+ 
+    if not st.session_state.rag_indexed_files:
+        st.info("👈 Upload documents in the sidebar to get started")
+        st.markdown("""
+**What you can do:**
+- 📄 Upload multiple PDFs, Word docs, or text files
+- 💬 Ask questions across all documents at once
+- 🔍 Get answers with source citations
+- 🧠 Search by meaning — not just keywords
+        """)
+    else:
+        rag_llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite", google_api_key=api_key)
+ 
+        st.success(f"**{len(st.session_state.rag_indexed_files)} document(s) ready** - ask anything!")
+ 
+        # Chat history
+        for message in st.session_state.rag_chat_history:
+            if message["role"] == "user":
+                with st.chat_message("user"):
+                    st.markdown(message["content"])
             else:
-                st.session_state.chat_history.append({"role": "assistant", "content": ai_response})
+                with st.chat_message("assistant"):
+                    st.markdown(message["content"])
+                    if message.get("sources"):
+                        st.caption(f"📄 Sources: {', '.join(message['sources'])}")
+ 
+        # Chat input
+        rag_question = st.chat_input("Ask a question about your documents...")
+        if rag_question:
+            with st.chat_message("user"):
+                st.markdown(rag_question)
+ 
+            with st.chat_message("assistant"):
+                with st.status("🔍 Searching documents...", expanded=False) as status:
+                    answer, sources = rag_query(
+                        rag_question, rag_collection, rag_embeddings, rag_llm, rag_top_k
+                    )
+                    status.update(label="✅ Done!", state="complete")
+ 
+                st.markdown(answer)
+                if sources:
+                    st.caption(f"📄 Sources: {', '.join(sources)}")
+ 
+            st.session_state.rag_chat_history.append({"role": "user", "content": rag_question})
+            st.session_state.rag_chat_history.append({"role": "assistant", "content": answer, "sources": sources})
