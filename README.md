@@ -4,7 +4,7 @@ An end-to-end AI platform that transforms raw data and documents into
 actionable insights - built with Python, LangChain, LangGraph, and Google Gemini.
 
 ## 🌐 Live Demo
-🔗 [Clarix](https://ai-report-generator-zh3az7tzybjdchxa6atywt.streamlit.app/)
+🔗 [Clarix](https://clarix-ai.streamlit.app/)
 
 ---
 
