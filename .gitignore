@@ -1,0 +1,33 @@
+﻿# Environment
+.env
+.env.local
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# ChromaDB
+chroma_db/
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Streamlit secrets
+.streamlit/
+
+# Logs
+*.log
