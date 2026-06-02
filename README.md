@@ -62,8 +62,7 @@ Upload PDFs, Word docs, or text files and ask questions across all of them.
 ## 🚀 How to run locally
 
 ### 1. Clone the repo
-git clone https://github.com/AyushLadha/ai-report-generator.git
-cd ai-report-generator
+git clone https://github.com/AyushLadha/Clarix-AI.git
 
 ### 2. Create virtual environment
 python -m venv .venv
