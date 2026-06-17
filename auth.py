@@ -6,7 +6,6 @@ from datetime import datetime
 DB_PATH = "users.db"
 
 def init_db():
-    """Create the users table if it doesn't exist."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -20,7 +19,6 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-    print("✅ Database initialized")
 
 # ── Password hashing ──────────────────────────────────────────
 def hash_password(password: str) -> str:

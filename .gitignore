@@ -1,18 +1,32 @@
 ﻿# Environment
 .env
 .env.local
+.env.production
 
 # Virtual environment
 .venv/
 venv/
 env/
+ENV/
 
 # Python cache
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.Python
 
-# ChromaDB
+# Database files (auth)
+users.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ChromaDB local storage
 chroma_db/
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
 
 # VS Code
 .vscode/
@@ -25,9 +39,19 @@ chroma_db/
 
 # Windows
 Thumbs.db
+desktop.ini
 
 # Streamlit secrets
 .streamlit/
 
 # Logs
 *.log
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# Temp files
+*.tmp
+*.temp

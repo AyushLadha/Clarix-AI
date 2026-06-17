@@ -21,7 +21,12 @@ from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, Te
 from auth import init_db, signup_user, login_user
 
 # --------------- Initialize auth database ---------------
-init_db()
+@st.cache_resource
+def setup_database():
+    init_db()
+    return True
+
+setup_database()
 
 # --------------- Load API key ---------------
 load_dotenv()

@@ -28,6 +28,34 @@ Upload any CSV or Excel file and get a structured business report instantly.
 - `generate_insights` - produces business recommendations
 
 ---
+## 🔐 User Authentication (Phase 4)
+
+Each user gets a private workspace with their own documents and data.
+
+**What it does:**
+- Sign up with email and password
+- Passwords hashed with bcrypt (industry standard, never stored in plain text)
+- User accounts persisted in SQLite database
+- Each logged-in user gets an isolated ChromaDB collection for documents
+- Login/logout flow with session-based authentication
+
+**Tech:**
+- bcrypt for password hashing
+- SQLite for user account storage
+- Streamlit session_state for login persistence
+
+---
+
+## 📋 Known Limitations
+
+This is a portfolio project on Streamlit Cloud's free tier. In production, the following would be addressed:
+
+- **Document persistence:** ChromaDB runs in-memory, so uploaded documents wipe on logout. Production would use persistent ChromaDB on disk or hosted vector DB (Pinecone, Weaviate, Supabase pgvector)
+- **Chat history persistence:** Stored in session_state. Production would store per-user in PostgreSQL
+- **API rate limits:** Free Gemini tier has 250K tokens/min cap. Production would use paid tier or self-hosted models
+- **Streamlit Cloud restarts:** Free tier wipes ALL local files including SQLite on restart. Production would use hosted database (Neon, Supabase)
+
+---
 
 ## 🔍 Doc Explore Mode
 
@@ -127,6 +155,6 @@ streamlit run app.py
 ---
 
 ## 🔮 What's next
-- [ ] Phase 4: Combined mode - query data + search documents simultaneously
+- [ ] Phase 5: Combined mode - query data + search documents simultaneously
 - [ ] Persistent vector storage across sessions
 - [ ] Support for more file types (CSV to Doc Explore, images)
