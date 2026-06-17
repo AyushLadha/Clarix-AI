@@ -37,25 +37,32 @@ def verify_password(password: str, hashed: str) -> bool:
 # ── User operations ──────────────────────────────────────────
 def signup_user(email: str, name: str, password: str) -> tuple:
     """Create a new user. Returns (success, message)."""
+    # Strip whitespace first
+    email = email.strip().lower() if email else ""
+    name = name.strip() if name else ""
+
     # Validate inputs
     if not email or not name or not password:
         return False, "All fields are required"
     if len(password) < 6:
         return False, "Password must be at least 6 characters"
-    if "@" not in email or "." not in email:
+    
+    # Better email validation using regex
+    import re
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, email):
         return False, "Invalid email format"
 
     # Hash the password
     password_hash = hash_password(password)
 
-    # Insert into database
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO users (email, name, password_hash, created_at)
             VALUES (?, ?, ?, ?)
-        """, (email.lower().strip(), name.strip(), password_hash, datetime.now().isoformat()))
+        """, (email, name, password_hash, datetime.now().isoformat()))
         conn.commit()
         user_id = cursor.lastrowid
         conn.close()
@@ -64,7 +71,7 @@ def signup_user(email: str, name: str, password: str) -> tuple:
         return False, "Email already registered"
     except Exception as e:
         return False, f"Error: {str(e)}"
-
+    
 def login_user(email: str, password: str) -> tuple:
     """Verify credentials. Returns (success, user_data_or_message)."""
     if not email or not password:
